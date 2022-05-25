@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+
+# Instant Replay Suite
+testing
+recent_clips.txt
