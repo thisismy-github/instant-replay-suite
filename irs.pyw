@@ -278,6 +278,17 @@ def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com
 
 
 # ---------------------
+# Custom Pystray class
+# ---------------------
+class Icon(pystray._win32.Icon):
+    ''' This subclass auto-updates the menu before opening,
+        allowing dynamic titles/actions to always be up-to-date. '''
+    def _on_notify(self, wparam, lparam):
+        if lparam == 0x0205: self._update_menu()   # "win32.WM_RBUTTONUP" in pystray
+        super()._on_notify(wparam, lparam)
+
+
+# ---------------------
 # Clip class
 # ---------------------
 class Clip:
@@ -470,7 +481,6 @@ class AutoCutter:
         finally:
             if manual_update: self.last_clips.sort(key=lambda clip: clip.time)
             self.waiting_for_clip = False
-            #tray_icon.update_menu()
 
     # ---------------------
     # Clip actions
@@ -485,7 +495,6 @@ class AutoCutter:
         except:
             logging.error(f'Error while cutting last clip: {format_exc()}')
             play_alert('error')
-        #finally: tray_icon.update_menu()
 
 
     def concatenate_last_clips(self, patient=True):
@@ -514,7 +523,6 @@ class AutoCutter:
         except:
             logging.error(f'Error while concatenating last two clips: {format_exc()}')
             play_alert('error')
-        #finally: tray_icon.update_menu()
 
 
     def delete_clip(self, index=-1, patient=True):
@@ -528,7 +536,6 @@ class AutoCutter:
         except:
             logging.error(f'Error while deleting last clip: {format_exc()}')
             play_alert('error')
-        #finally: tray_icon.update_menu()
 
 
     def open_clip(self, index=-1, play=TRAY_CLIPS_PLAY_ON_CLICK, patient=True):
@@ -543,7 +550,6 @@ class AutoCutter:
         except:
             logging.error(f'Error while cutting last clip: {format_exc()}')
             play_alert('error')
-        #finally: tray_icon.update_menu()
 
 
     def compress_clip(self, index=-1, patient=True):
@@ -581,7 +587,6 @@ class AutoCutter:
             play_alert('error')
         finally:
             clip.working = False
-            #tray_icon.update_menu()
 
 
 ###########################################################
@@ -600,7 +605,6 @@ if __name__ == '__main__':
                 clip = cutter.last_clips[index]
                 if not exists(clip.path):
                     cutter.pop(index)
-                    #tray_icon.update_menu()
                     return get_clip_tray_title(index)
 
                 # get loose estimate of how long ago it was, if necessary
@@ -779,7 +783,7 @@ if __name__ == '__main__':
         #hicon = CreateIconFromResourceEx(png, len(png), 1, 0x30000, size_x, size_y, LR_DEFAULTCOLOR)
 
         # create system tray icon
-        tray_icon = pystray.Icon(None, Image.open(ICON_PATH), 'Instant Replay Suite', tray_menu, autoupdate=True)
+        tray_icon = Icon(None, Image.open(ICON_PATH), 'Instant Replay Suite', tray_menu)
 
         # cleanup *some* extraneous dictionaries/collections/functions
         del get_clip_tray_action
