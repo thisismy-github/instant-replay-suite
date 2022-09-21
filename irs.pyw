@@ -43,31 +43,72 @@ RENAME_DATE_FORMAT = '%y.%m.%d'     # https://strftime.org/
 RENAME_COUNT_START_NUMBER = 1
 RENAME_COUNT_PADDED_ZEROS = 0
 
+'''
+--- CUSTOM TRAY MENU TUTORIAL ---
+`TRAY_ADVANCED_MODE_MENU` defines the custom tray you wish to use. It's a list
+(or tuple) of items. Items may be strings which directly insert an item into
+the menu, or a single-key dictionary with a custom name as the key (string),
+and the item you wish to insert and rename as the value (string). A dictionary
+with a list as the value will become a submenu, with the key being the title.
+Submenus work just like the base menu, and can be nested indefinitely.
+
+All custom tray items:
+    'open_log':             Opens this program's log file.
+    'open_video_folder':    Opens the currently defined "Videos" folder.
+    'open_install_folder':  Opens this program's root folder.
+    'play_most_recent':     Plays your most recent clip.
+    'explore_most_recent':  Opens your most recent clip in Explorer.
+    'delete_most_recent':   Deletes your most recent clip.
+    'concatenate_last_two': Concatenates your two most recent clips.
+    'clear_history':        Clears your clip history.
+    'update':               Manually checks for recently saved clips. Hopefully not necessary.
+    'quit':                 Exits this program.
+
+Special tray items:
+    'separator':            Adds a separator in the menu.
+                                -Cannot be renamed.
+    'memory':               Displays current RAM usage.
+                                -This is somewhat misleading and not worth using.
+                                -Use '?memory' in the title to represent where the number will be:
+                                    {'RAM: ?memory': 'memory'}
+                                -This item will be greyed out and is informational only.
+    'recent_clips':         Displays your most recent clips.
+                                -Cannot be renamed.
+                                -Renaming this item will simply place it within a submenu:
+                                    {'Recent clips': 'recent_clips'}
+                                -See "Recent clip menu settings" below for lots of customization.
+
+---
+
+Submenu example:
+    {'Quick actions': [
+        {'Play most recent clip': 'play_most_recent'},
+        {'View last clip in explorer': 'explore_most_recent'},
+        {'Concatenate last two clips': 'concatenate_last_two'},
+        {'Delete most recent clip': 'delete_most_recent'},
+    ]}
+'''
+
 TRAY_ADVANCED_MODE = True
 TRAY_ADVANCED_MODE_MENU = (
     {'View log': 'open_log'},
     {'View videos': 'open_video_folder'},
     {'View root': 'open_install_folder'},
     'separator',
-    {'Quick actions': [
-        {'Play most recent clip': 'play_most_recent'},
-        {'View last clip in explorer': 'explore_most_recent'},
-        {'Concatenate last two clips': 'concatenate_last_two'},
-        {'Delete most recent clip': 'delete_most_recent'},
-    ]},
-    #{'Play last clip': 'play_most_recent'},
-    #{'Explore last clip': 'explore_most_recent'},
-    #{'Concat last clips': 'concatenate_last_two'},
-    #{'Recent clips': 'recent_clips'},
+    {'Play last clip': 'play_most_recent'},
+    {'Explore last clip': 'explore_most_recent'},
+    {'Splice last clips': 'concatenate_last_two'},
+    {'Delete last clip': 'delete_most_recent'},
+    'separator',
     'recent_clips',
     'separator',
-    {'RAM: ?memory': 'memory'},
     {'Update clips': 'update'},
     {'Clear history': 'clear_history'},
     {'Exit': 'quit'},
 )
 
-# Basic mode (TRAY_ADVANCED_MODE = False) only
+
+# --- Basic mode (TRAY_ADVANCED_MODE = False) only ---
 TRAY_SHOW_QUICK_ACTIONS = True
 TRAY_RECENT_CLIPS_IN_SUBMENU = False
 TRAY_QUICK_ACTIONS_IN_SUBMENU = True
@@ -80,7 +121,8 @@ TRAY_QUICK_ACTIONS_IN_SUBMENU = True
     quit     - Exit program on left-click. '''
 TRAY_LEFT_CLICK_ACTION = 'videos'
 
-# Recent clip menu settings
+
+# --- Recent clip menu settings ---
 TRAY_RECENT_CLIP_COUNT = 5
 TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = True
 TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO = True    # TODO have auto_update turn on or off based on these settings
@@ -98,6 +140,8 @@ TRAY_RECENT_CLIP_NAME_FORMAT = '(?recencyshort) - ?clip'
 TRAY_RECENT_CLIP_DATE_FORMAT = '%#I:%M%p'
 TRAY_RECENT_CLIP_DEFAULT_TEXT = ' --'
 
+
+# --- Hotkeys ---
 CONCATENATE_HOTKEY = 'alt + c'
 DELETE_HOTKEY = 'ctrl + alt + d'
 LENGTH_HOTKEY = 'alt'
@@ -107,9 +151,14 @@ LENGTH_DICTIONARY = {
     '3': 30,
     '4': 40,
     '5': 50,
-    '6': 60
+    '6': 60,
+    '7': 70,
+    '8': 80,
+    '9': 90
 }
 
+
+# --- Game aliases ---
 GAME_ALIASES = {    # NOTE: the game titles must be lowercase and have no double-spaces
     "left 4 dead": "L4D1",
     "left 4 dead 2": "L4D2",
@@ -121,6 +170,8 @@ GAME_ALIASES = {    # NOTE: the game titles must be lowercase and have no double
     "tom clancy's rainbow six siege": "R6"
 }
 
+
+# --- Registry setting overrides ---
 VIDEO_PATH_OVERRIDE = ''
 INSTANT_REPLAY_HOTKEY_OVERRIDE = ''
 
