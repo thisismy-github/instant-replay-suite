@@ -548,10 +548,10 @@ class AutoCutter:
             play_alert('error')
 
 
-    def concatenate_last_clips(self, patient=True):
+    def concatenate_last_clips(self, index=-1, patient=True):
         try:
-            clip1 = self.get_clip(index=-2, alert='Concatenate', min_clips=1, patient=patient)
-            clip2 = self.get_clip(index=-1, alert='Concatenate', min_clips=2, patient=patient)
+            clip1 = self.get_clip(index=index - 1, alert='Concatenate', min_clips=1, patient=patient)
+            clip2 = self.get_clip(index=index, alert='Concatenate', min_clips=2, patient=patient)
             clip1path = clip1.path         # these could be popped here, but it's safer and simpler to do it this way
             clip2path = clip2.path
 
@@ -706,7 +706,7 @@ if __name__ == '__main__':
                     pystray.MenuItem('Trim...', pystray.Menu(*(pystray.MenuItem(f'{length} seconds', get_trim_action(length, index)) for length in LENGTH_DICTIONARY.values()))),
                     pystray.MenuItem('Play...', lambda: cutter.open_clip(index, play=True, patient=False)),
                     pystray.MenuItem('Explore...', lambda: cutter.open_clip(index, play=False, patient=False)),
-                    #pystray.MenuItem('Concatenate with prior clip', cutter.concatenate_last_clips),
+                    pystray.MenuItem('Splice...', lambda: cutter.concatenate_last_clips(index, patient=False)),
                     #pystray.MenuItem('Compress...', lambda: cutter.compress_clip(index, patient=False)),
                     #pystray.MenuItem('Audio only...', lambda: cutter.???(index, patient=False)),
                     #pystray.MenuItem('Video only...', lambda: cutter.???(index, patient=False)),
