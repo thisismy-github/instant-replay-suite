@@ -524,6 +524,7 @@ class AutoCutter:
 
                         clip = Clip(path, stat, rename=RENAME)
                         self.last_clips.append(clip)
+                        self.last_clip_time = stat.st_ctime
                         logging.info(f'Memory usage after adding clip: {get_memory():.2f}mb\n')
                         if manual_update: continue
                         else: return
