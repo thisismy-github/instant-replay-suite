@@ -17,14 +17,14 @@ from PIL import Image               # 2.13mb  / 15.48mb
 from datetime import datetime       # 0.125mb / 13.475mb
 from traceback import format_exc    # 0.35mb  / 13.70mb     <- Heavy, but probably worth it
 from threading import Thread        # 0.125mb / 13.475mb
-#from ctypes import *                # 0.27mb / 1.15mb / 14.5mb
-#from ctypes.wintypes import *
 tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 # Starts with roughly ~36.7mb of memory usage. Roughly 9.78mb combined from imports alone, without psutil and cv2/pymediainfo (9.63mb w/o tracemalloc).
 # detecting shadowplay videos via their encoding is possible (but useless) https://github.com/rebane2001/NvidiaInstantRename/blob/mane/InstantRenameCLI.py
 # NOTE add dynamic tooltips to pystray library
 # NOTE add mute audio/audio only options(?), maybe simplify "trim..." submenu if performance is bad
+# TODO cropping ability -> pick crop region after saving instant replay OR before starting recording
+# TODO backup option -> keep copy of latest clip on hand at all times
 # TODO option to hide system tray icon until specific hotkey is pressed/shortcut is opened
 # TODO finish and upload fork of pystray to github
 #           - add dynamic tooltips (when hovering over icon)
@@ -39,7 +39,7 @@ tracemalloc.start()                 # start recording memory usage AFTER librari
 AUDIO = True
 RENAME = True
 RENAME_FORMAT = '?game ?date #?count'
-RENAME_DATE_FORMAT = '%y.%m.%d'         # https://strftime.org/
+RENAME_DATE_FORMAT = '%y.%m.%d'     # https://strftime.org/
 RENAME_COUNT_START_NUMBER = 1
 RENAME_COUNT_PADDED_ZEROS = 0
 
@@ -381,8 +381,8 @@ class AutoCutter:
         keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.set_last_clip)
         keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
         keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
-        for number_key, length in LENGTH_DICTIONARY.items():
-            keyboard.add_hotkey(f'{LENGTH_HOTKEY} + {number_key}', self.trim_clip, args=(length,))
+        for key, length in LENGTH_DICTIONARY.items():
+            keyboard.add_hotkey(f'{LENGTH_HOTKEY} + {key}', self.trim_clip, args=(length,))
         logging.info('Auto-cutter initialized.')
 
     # ---------------------
@@ -650,9 +650,9 @@ if __name__ == '__main__':
                     )
                 else: extra_info_items = tuple()
 
-                get_trim_lambda = lambda length, index: lambda: cutter.trim_clip(length, index, patient=False)   # workaround for python bug/oddity involving creating lambdas in iterables
+                get_trim_action = lambda length, index: lambda: cutter.trim_clip(length, index, patient=False)   # workaround for python bug/oddity involving creating lambdas in iterables
                 return pystray.Menu(
-                    pystray.MenuItem('Trim...', pystray.Menu(*(pystray.MenuItem(f'{length} seconds', get_trim_lambda(length, index)) for length in LENGTH_DICTIONARY.values()))),
+                    pystray.MenuItem('Trim...', pystray.Menu(*(pystray.MenuItem(f'{length} seconds', get_trim_action(length, index)) for length in LENGTH_DICTIONARY.values()))),
                     pystray.MenuItem('Play...', lambda: cutter.open_clip(index, play=True, patient=False)),
                     pystray.MenuItem('Explore...', lambda: cutter.open_clip(index, play=False, patient=False)),
                     #pystray.MenuItem('Concatenate with prior clip', cutter.concatenate_last_clips),
@@ -670,8 +670,8 @@ if __name__ == '__main__':
         SEPARATOR = pystray.MenuItem(pystray.MenuItem(None, None), None)
 
         # creating the base recent-clip menu
-        get_title_function = lambda index: lambda _: get_clip_tray_title(index)  # workaround for python bug/oddity involving creating lambdas in iterables
-        RECENT_CLIPS_BASE = tuple(pystray.MenuItem(get_title_function(i), get_clip_tray_action(i)) for i in range(-1, (TRAY_RECENT_CLIP_COUNT * -1) - 1, -1))
+        title_callback = lambda index: lambda _: get_clip_tray_title(index)  # workaround for python bug/oddity involving creating lambdas in iterables
+        RECENT_CLIPS_BASE = tuple(pystray.MenuItem(title_callback(i), get_clip_tray_action(i)) for i in range(-1, (TRAY_RECENT_CLIP_COUNT * -1) - 1, -1))
 
         # action dictionaries
         LEFT_CLICK_ACTIONS = {
@@ -787,7 +787,7 @@ if __name__ == '__main__':
 
         # cleanup *some* extraneous dictionaries/collections/functions
         del get_clip_tray_action
-        del get_title_function
+        del title_callback
         del tray_menu
         del SEPARATOR
         del RECENT_CLIPS_BASE
