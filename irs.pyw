@@ -553,7 +553,7 @@ class AutoCutter:
     def concatenate_last_clips(self, index=-1, patient=True):
         try:
             clip1 = self.get_clip(index=index - 1, alert='Concatenate', min_clips=1, patient=patient)
-            clip2 = self.get_clip(index=index, alert='Concatenate', min_clips=2, patient=patient)
+            clip2 = self.get_clip(index=index, min_clips=2, patient=patient)
             clip1path = clip1.path         # these could be popped here, but it's safer and simpler to do it this way
             clip2path = clip2.path
 
@@ -698,11 +698,10 @@ if __name__ == '__main__':
             if TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS:
                 if TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO:
                     last_clips = cutter.last_clips
-                    index_is_valid = len(last_clips) >= -index
                     extra_info_items = (
                         pystray.MenuItem(pystray.MenuItem(None, None), None),
-                        pystray.MenuItem(lambda _: last_clips[index].length_size_string if index_is_valid else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False),
-                        pystray.MenuItem(lambda _: last_clips[index].full_date if index_is_valid else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False)
+                        pystray.MenuItem(lambda _: last_clips[index].length_size_string if len(last_clips) >= -index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False),
+                        pystray.MenuItem(lambda _: last_clips[index].full_date if len(last_clips) >= -index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False)
                     )
                 else: extra_info_items = tuple()
 
