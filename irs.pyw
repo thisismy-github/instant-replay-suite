@@ -20,18 +20,24 @@ from threading import Thread        # 0.125mb / 13.475mb
 tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 # Starts with roughly ~36.7mb of memory usage. Roughly 9.78mb combined from imports alone, without psutil and cv2/pymediainfo (9.63mb w/o tracemalloc).
-# detecting shadowplay videos via their encoding is possible (but useless) https://github.com/rebane2001/NvidiaInstantRename/blob/mane/InstantRenameCLI.py
-# NOTE add dynamic tooltips to pystray library
-# NOTE add mute audio/audio only options(?), maybe simplify "trim..." submenu if performance is bad
-# TODO cropping ability -> pick crop region after saving instant replay OR before starting recording
-# TODO backup option -> keep copy of latest clip on hand at all times
-# TODO option to hide system tray icon until specific hotkey is pressed/shortcut is opened
-# TODO finish and upload fork of pystray to github
-#           - add dynamic tooltips (when hovering over icon)
-#           - why does exiting cause it to loop around to .run()?
-#           - actions should work with class methods (self makes them break)
-#           - expanded default/left-click action functionality (bold option, explicit left-click declaration, etc.)
-#           - DEBUG init: Image: failed to import FpxImagePlugin: No module named 'olefile'
+# Detecting shadowplay videos via their encoding is possible (but useless) https://github.com/rebane2001/NvidiaInstantRename/blob/mane/InstantRenameCLI.py
+
+'''
+TODO backup system -> keep copy of latest clips and/or latest edits on hand at all times
+TODO add deletion "confirmation" (press delete hotkey twice? add delete submenu for the tray?)
+TODO cropping ability -> pick crop region after saving instant replay OR before starting recording
+TODO add dedicated config file, possibly separate file for defining tray menu
+TODO pystray subclass/library improvements (https://github.com/moses-palmer/pystray)
+        - add dynamic tooltips (when hovering over icon)
+        - add double-click support
+        - NOTE: You are unlikely to get these (or my auto-updating subclass) accepted
+                into the main library without extensive cross-platform support.
+FIXME: Alt + Arrow Keys emits number shortcuts (is it just my keyboard?)
+        - Alt + Up    = Alt + 8
+        - Alt + Down  = Alt + 2
+        - Alt + Left  = Alt + 4
+        - Alt + Right = Alt + 6
+'''
 
 # ---------------------
 # Settings
