@@ -511,11 +511,12 @@ class AutoCutter:
                 self.last_clip_time = time.time() - 1
                 time.sleep(3)
             logging.info(f'Scanning {VIDEO_PATH} for videos')
+            last_clip_time = self.last_clip_time    # alias for optimization
             for root, _, files in os.walk(VIDEO_PATH):
                 for file in files:
                     path = pjoin(root, file)
                     stat = getstat(path)
-                    if self.last_clip_time < stat.st_ctime:
+                    if last_clip_time < stat.st_ctime:
                         logging.info(f'New video detected: {file}')
                         while get_video_duration(path) == 0:
                             print('VIDEO IS 0')
@@ -691,13 +692,16 @@ if __name__ == '__main__':
 
         def get_clip_tray_action(index: int):
             ''' Generates the action associated with each recent clip item in the tray-icon's menu.
-                If a submenu is desired, one is created and returned. Otherwise, a callable lambda is returned. '''
+                If a submenu is desired, one is created and returned. Otherwise, a callable lambda is returned.
+                `index` will be a negative number, starting with -1 for the topmost item. '''
             if TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS:
                 if TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO:
+                    last_clips = cutter.last_clips
+                    index_is_valid = len(last_clips) >= -index
                     extra_info_items = (
                         pystray.MenuItem(pystray.MenuItem(None, None), None),
-                        pystray.MenuItem(lambda _: cutter.last_clips[index].length_size_string if len(cutter.last_clips) * -1 <= index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False),
-                        pystray.MenuItem(lambda _: cutter.last_clips[index].full_date if len(cutter.last_clips) * -1 <= index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False)
+                        pystray.MenuItem(lambda _: last_clips[index].length_size_string if index_is_valid else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False),
+                        pystray.MenuItem(lambda _: last_clips[index].full_date if index_is_valid else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False)
                     )
                 else: extra_info_items = tuple()
 
