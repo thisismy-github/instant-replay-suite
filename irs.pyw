@@ -58,7 +58,7 @@ and the item you wish to insert and rename as the value (string). A dictionary
 with a list as the value will become a submenu, with the key being the title.
 Submenus work just like the base menu, and can be nested indefinitely.
 
-All custom tray items:
+Normal tray items:
     'open_log':             Opens this program's log file.
     'open_video_folder':    Opens the currently defined "Videos" folder.
     'open_install_folder':  Opens this program's root folder.
@@ -95,6 +95,7 @@ Submenu example:
     ]}
 '''
 
+TRAY_LEFT_CLICK_ACTION = 'open_video_folder'
 TRAY_ADVANCED_MODE = True
 TRAY_ADVANCED_MODE_MENU = (
     {'View log': 'open_log'},
@@ -118,14 +119,6 @@ TRAY_ADVANCED_MODE_MENU = (
 TRAY_SHOW_QUICK_ACTIONS = True
 TRAY_RECENT_CLIPS_IN_SUBMENU = False
 TRAY_QUICK_ACTIONS_IN_SUBMENU = True
-
-''' log      - Open log file on left-click.
-    videos   - Open VIDEO_PATH on left-click.
-    play     - Play most recent clip on left-click.
-    explore  - Open most recent clip in explorer on left-click.
-    root     - Open root directory of program on left-click.
-    quit     - Exit program on left-click. '''
-TRAY_LEFT_CLICK_ACTION = 'videos'
 
 
 # --- Recent clip menu settings ---
@@ -734,34 +727,24 @@ if __name__ == '__main__':
         title_callback = lambda index: lambda _: get_clip_tray_title(index)  # workaround for python bug/oddity involving creating lambdas in iterables
         RECENT_CLIPS_BASE = tuple(pystray.MenuItem(title_callback(i), get_clip_tray_action(i)) for i in range(-1, (TRAY_RECENT_CLIP_COUNT * -1) - 1, -1))
 
-        # action dictionaries
-        LEFT_CLICK_ACTIONS = {
-            'log':     lambda: pystray.MenuItem(None, action=lambda: os.startfile(LOG_PATH), default=True, visible=False),
-            'videos':  lambda: pystray.MenuItem(None, action=lambda: os.startfile(VIDEO_PATH), default=True, visible=False),
-            'play':    lambda: pystray.MenuItem(None, action=lambda: cutter.open_clip(play=True), default=True, visible=False),
-            'explore': lambda: pystray.MenuItem(None, action=lambda: cutter.open_clip(play=False), default=True, visible=False),
-            'root':    lambda: pystray.MenuItem(None, action=lambda: os.startfile(CWD), default=True, visible=False),
-            'quit':    lambda: pystray.MenuItem(None, action=quit_tray, default=True, visible=False),
-        }
-        TRAY_ADVANCED_MODE_ACTIONS = {
-            'open_log':             lambda name: pystray.MenuItem(name, action=lambda: os.startfile(LOG_PATH)),
-            'open_video_folder':    lambda name: pystray.MenuItem(name, action=lambda: os.startfile(VIDEO_PATH)),
-            'open_install_folder':  lambda name: pystray.MenuItem(name, action=lambda: os.startfile(CWD)),
-            'play_most_recent':     lambda name: pystray.MenuItem(name, action=lambda: cutter.open_clip(play=True)),
-            'explore_most_recent':  lambda name: pystray.MenuItem(name, action=lambda: cutter.open_clip(play=False)),
-            'delete_most_recent':   lambda name: pystray.MenuItem(name, action=cutter.delete_clip),             # small RAM drop by making these not lambdas
-            'concatenate_last_two': lambda name: pystray.MenuItem(name, action=cutter.concatenate_last_clips),  # 26.0mb -> 25.8mb on average
-            'clear_history':        lambda name: pystray.MenuItem(name, action=cutter.last_clips.clear),
-            'update':               lambda name: pystray.MenuItem(name, action=lambda: cutter.set_last_clip(manual_update=True)),
-            'quit':                 lambda name: pystray.MenuItem(name, action=quit_tray),
+        # action dictionary
+        TRAY_ACTIONS = {
+            'open_log':             lambda: os.startfile(LOG_PATH),
+            'open_video_folder':    lambda: os.startfile(VIDEO_PATH),
+            'open_install_folder':  lambda: os.startfile(CWD),
+            'play_most_recent':     lambda: cutter.open_clip(play=True),
+            'explore_most_recent':  lambda: cutter.open_clip(play=False),
+            'delete_most_recent':   cutter.delete_clip,                     # small RAM drop by making these not lambdas
+            'concatenate_last_two': cutter.concatenate_last_clips,          # 26.0mb -> 25.8mb on average
+            'clear_history':        cutter.last_clips.clear,
+            'update':               lambda: cutter.set_last_clip(manual_update=True),
+            'quit':                 quit_tray,
         }
 
-        # setting left-click action
-        if TRAY_LEFT_CLICK_ACTION in LEFT_CLICK_ACTIONS: LEFT_CLICK_ACTION = LEFT_CLICK_ACTIONS[TRAY_LEFT_CLICK_ACTION]()
-        elif TRAY_LEFT_CLICK_ACTION in TRAY_ADVANCED_MODE_ACTIONS: LEFT_CLICK_ACTION = TRAY_ADVANCED_MODE_ACTIONS[TRAY_LEFT_CLICK_ACTION]()
-        else:
-            LEFT_CLICK_ACTION = pystray.MenuItem(pystray.MenuItem(None, None), None, visible=False)
-            logging.warning(f'(X) Left click action "{TRAY_LEFT_CLICK_ACTION}" does not exist')
+        # setting left-click action (pystray has an unusual implementation)
+        LEFT_CLICK_ACTION = TRAY_ACTIONS.get(TRAY_LEFT_CLICK_ACTION)
+        if LEFT_CLICK_ACTION is None: logging.warning(f'(X) Left click action "{TRAY_LEFT_CLICK_ACTION}" does not exist')
+        LEFT_CLICK_ACTION = pystray.MenuItem(None, action=LEFT_CLICK_ACTION, default=True, visible=False)
 
         # creating menu -- advanced mode
         if TRAY_ADVANCED_MODE:
@@ -788,7 +771,7 @@ if __name__ == '__main__':
                             elif action == 'recent_clips':
                                 action = (action,)  # set action as tuple and raise AttributeError to read it as a submenu
                                 raise AttributeError
-                            menu.append(TRAY_ADVANCED_MODE_ACTIONS[action](name))
+                            menu.append(pystray.MenuItem(name, action=TRAY_ACTIONS[action]))
                         except AttributeError:      # AttributeError -> item is a submenu
                             if isinstance(action, list) or isinstance(action, tuple):
                                 submenu = []
@@ -858,6 +841,8 @@ if __name__ == '__main__':
         del CONCATENATE_HOTKEY
         del DELETE_HOTKEY
         del LENGTH_HOTKEY
+        del TRAY_ACTIONS
+        del TRAY_LEFT_CLICK_ACTION
 
         # final garbage collection to reduce memory usage
         gc.collect(generation=2)
