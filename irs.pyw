@@ -17,6 +17,9 @@ from PIL import Image               # 2.13mb  / 15.48mb
 from datetime import datetime       # 0.125mb / 13.475mb
 from traceback import format_exc    # 0.35mb  / 13.70mb     <- Heavy, but probably worth it
 from threading import Thread        # 0.125mb / 13.475mb
+
+import ctypes
+from pystray._util import win32
 tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 # Starts with roughly ~36.7mb of memory usage. Roughly 9.78mb combined from imports alone, without psutil and cv2/pymediainfo (9.63mb w/o tracemalloc).
@@ -252,6 +255,16 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
 else: INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
 logging.info(f'Instant replay hotkey: "{INSTANT_REPLAY_HOTKEY}"')
 
+# get taskbar position from registry (NOTE: 0 = left, 1 = top, 2 = right, 3 = bottom)
+try:    # NOTE: this value takes a few moments to update after moving the taskbar (if you're testing this)
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3')
+    taskbar_position = winreg.QueryValueEx(key, 'Settings')[0][12]
+    # top-right alignment adjusts itself automatically for all EXCEPT left taskbars
+    if taskbar_position == 0: MENU_ALIGNMENT = win32.TPM_LEFTALIGN | win32.TPM_BOTTOMALIGN
+    else: MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
+except: logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
+logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
+
 USAGE_BAD_TRAY_ITEM_ERROR = '\n\nUsage: {"title of item": "action_of_item"}\n       OR\n       {"title of submenu": {nested_menu}}\n\nNote the colon (:) between the title and it\'s action.'
 DEV_MIN_CLIP_OBJECTS = 5
 CLIP_BUFFER = max(DEV_MIN_CLIP_OBJECTS, TRAY_RECENT_CLIP_COUNT)
@@ -337,15 +350,39 @@ def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com
 # ---------------------
 # Custom Pystray class
 # ---------------------
-WM_RBUTTONUP = 0.0205
 WM_MBUTTONUP = 0x0208
 class Icon(pystray._win32.Icon):
     ''' This subclass auto-updates the menu before opening,
-        allowing dynamic titles/actions to always be up-to-date. '''
+        allowing dynamic titles/actions to always be up-to-date,
+        and adds support for middle-clicks and custom menu alignments.
+        Full comments can be found in the original _win32.Icon class. '''
     def _on_notify(self, wparam, lparam):
-        if lparam == WM_RBUTTONUP: self._update_menu()
-        elif lparam == WM_MBUTTONUP and MIDDLE_CLICK_ACTION: MIDDLE_CLICK_ACTION()
-        super()._on_notify(wparam, lparam)
+        if lparam == win32.WM_LBUTTONUP:
+            self()
+
+        elif lparam == WM_MBUTTONUP:
+            if MIDDLE_CLICK_ACTION:
+                MIDDLE_CLICK_ACTION()
+
+        elif self._menu_handle and lparam == win32.WM_RBUTTONUP:
+            self._update_menu()
+
+            win32.SetForegroundWindow(self._hwnd)
+            point = ctypes.wintypes.POINT()
+            win32.GetCursorPos(ctypes.byref(point))
+            hmenu, descriptors = self._menu_handle
+
+            index = win32.TrackPopupMenuEx(
+                hmenu,
+                MENU_ALIGNMENT | win32.TPM_RETURNCMD,
+                point.x,
+                point.y,
+                self._menu_hwnd,
+                None
+            )
+
+            if index > 0:
+                descriptors[index - 1](self)
 
 
 # ---------------------
