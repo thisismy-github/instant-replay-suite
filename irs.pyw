@@ -29,7 +29,10 @@ TODO cropping ability -> pick crop region after saving instant replay OR before 
 TODO add dedicated config file, possibly separate file for defining tray menu
 TODO pystray subclass/library improvements (https://github.com/moses-palmer/pystray)
         - add dynamic tooltips (when hovering over icon)
-        - add double-click support
+        - add double-click support? https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-lbuttondblclk
+            - left-clicks still get registered
+            - pystray's _mainloop is blocking
+            - an entire thread dedicated to handling double-clicks would likely be needed (unreasonable)
         - NOTE: You are unlikely to get these (or my auto-updating subclass) accepted
                 into the main library without extensive cross-platform support.
 FIXME: Alt + Arrow Keys emits number shortcuts (is it just my keyboard?)
@@ -57,6 +60,9 @@ the menu, or a single-key dictionary with a custom name as the key (string),
 and the item you wish to insert and rename as the value (string). A dictionary
 with a list as the value will become a submenu, with the key being the title.
 Submenus work just like the base menu, and can be nested indefinitely.
+
+`TRAY_LEFT_CLICK_ACTION` and `TRAY_MIDDLE_CLICK_ACTION` define
+a single normal tray item to activate upon that specific click.
 
 Normal tray items:
     'open_log':             Opens this program's log file.
@@ -96,6 +102,7 @@ Submenu example:
 '''
 
 TRAY_LEFT_CLICK_ACTION = 'open_video_folder'
+TRAY_MIDDLE_CLICK_ACTION = 'play_most_recent'
 TRAY_ADVANCED_MODE = True
 TRAY_ADVANCED_MODE_MENU = (
     {'View log': 'open_log'},
@@ -330,11 +337,14 @@ def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com
 # ---------------------
 # Custom Pystray class
 # ---------------------
+WM_RBUTTONUP = 0.0205
+WM_MBUTTONUP = 0x0208
 class Icon(pystray._win32.Icon):
     ''' This subclass auto-updates the menu before opening,
         allowing dynamic titles/actions to always be up-to-date. '''
     def _on_notify(self, wparam, lparam):
-        if lparam == 0x0205: self._update_menu()   # "win32.WM_RBUTTONUP" in pystray
+        if lparam == WM_RBUTTONUP: self._update_menu()
+        elif lparam == WM_MBUTTONUP and MIDDLE_CLICK_ACTION: MIDDLE_CLICK_ACTION()
         super()._on_notify(wparam, lparam)
 
 
@@ -741,9 +751,13 @@ if __name__ == '__main__':
             'quit':                 quit_tray,
         }
 
-        # setting left-click action (pystray has an unusual implementation)
+        # setting special-click actions
         LEFT_CLICK_ACTION = TRAY_ACTIONS.get(TRAY_LEFT_CLICK_ACTION)
+        MIDDLE_CLICK_ACTION = TRAY_ACTIONS.get(TRAY_MIDDLE_CLICK_ACTION)
         if LEFT_CLICK_ACTION is None: logging.warning(f'(X) Left click action "{TRAY_LEFT_CLICK_ACTION}" does not exist')
+        if MIDDLE_CLICK_ACTION is None: logging.warning(f'(X) Middle click action "{TRAY_MIDDLE_CLICK_ACTION}" does not exist')
+
+        # setting the left-click action in pystray has an unusual implementation
         LEFT_CLICK_ACTION = pystray.MenuItem(None, action=LEFT_CLICK_ACTION, default=True, visible=False)
 
         # creating menu -- advanced mode
@@ -843,6 +857,7 @@ if __name__ == '__main__':
         del LENGTH_HOTKEY
         del TRAY_ACTIONS
         del TRAY_LEFT_CLICK_ACTION
+        del TRAY_MIDDLE_CLICK_ACTION
 
         # final garbage collection to reduce memory usage
         gc.collect(generation=2)
