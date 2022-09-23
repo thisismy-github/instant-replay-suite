@@ -183,6 +183,8 @@ GAME_ALIASES = {    # NOTE: the game titles must be lowercase and have no double
 # --- Registry setting overrides ---
 VIDEO_PATH_OVERRIDE = ''
 INSTANT_REPLAY_HOTKEY_OVERRIDE = ''
+TRAY_ALIGN_CENTER = False
+
 
 # ---------------------
 # Logging
@@ -256,13 +258,16 @@ else: INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
 logging.info(f'Instant replay hotkey: "{INSTANT_REPLAY_HOTKEY}"')
 
 # get taskbar position from registry (NOTE: 0 = left, 1 = top, 2 = right, 3 = bottom)
-try:    # NOTE: this value takes a few moments to update after moving the taskbar (if you're testing this)
-    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3')
-    taskbar_position = winreg.QueryValueEx(key, 'Settings')[0][12]
-    # top-right alignment adjusts itself automatically for all EXCEPT left taskbars
-    if taskbar_position == 0: MENU_ALIGNMENT = win32.TPM_LEFTALIGN | win32.TPM_BOTTOMALIGN
-    else: MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
-except: logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
+if TRAY_ALIGN_CENTER: MENU_ALIGNMENT = win32.TPM_CENTERALIGN | win32.TPM_TOPALIGN
+else:
+    try:    # NOTE: this value takes a few moments to update after moving the taskbar (if you're testing this)
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3')
+        taskbar_position = winreg.QueryValueEx(key, 'Settings')[0][12]
+
+        # top-right alignment adjusts itself automatically for all EXCEPT left taskbars
+        if taskbar_position == 0: MENU_ALIGNMENT = win32.TPM_LEFTALIGN | win32.TPM_BOTTOMALIGN
+        else: MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
+    except: logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
 logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
 
 USAGE_BAD_TRAY_ITEM_ERROR = '\n\nUsage: {"title of item": "action_of_item"}\n       OR\n       {"title of submenu": {nested_menu}}\n\nNote the colon (:) between the title and it\'s action.'
