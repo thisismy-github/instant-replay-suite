@@ -305,10 +305,10 @@ Please ensure `ffmpeg.exe` is either in your PATH or in this program's install f
 You can download FFmpeg for Windows from here: https://www.gyan.dev/ffmpeg/builds/\n\n---''')
 
 
-def quit_tray():
+def quit_tray(icon):
     logging.info('Closing system tray icon and exiting suite.')
-    tray_icon.visible = False
-    tray_icon.stop()
+    icon.visible = False
+    icon.stop()
     tracemalloc.stop()
     logging.info(f'Clip history: {cutter.last_clips}')
     with open(HISTORY_PATH, 'w') as history: history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
@@ -819,9 +819,9 @@ if __name__ == '__main__':
             'open_install_folder':  lambda: os.startfile(CWD),
             'play_most_recent':     lambda: cutter.open_clip(play=True),
             'explore_most_recent':  lambda: cutter.open_clip(play=False),
-            'delete_most_recent':   cutter.delete_clip,                     # small RAM drop by making these not lambdas
-            'concatenate_last_two': cutter.concatenate_last_clips,          # 26.0mb -> 25.8mb on average
-            'clear_history':        cutter.last_clips.clear,
+            'delete_most_recent':   lambda: cutter.delete_clip(),               # small RAM drop by making these not lambdas
+            'concatenate_last_two': lambda: cutter.concatenate_last_clips(),    # 26.0mb -> 25.8mb on average
+            'clear_history':        lambda: cutter.last_clips.clear(),
             'update':               lambda: cutter.set_last_clip(manual_update=True),
             'quit':                 quit_tray,
         }
@@ -878,8 +878,8 @@ if __name__ == '__main__':
             else: QUICK_ACTIONS_BASE = (
                 pystray.MenuItem('Play most recent clip', lambda: cutter.open_clip(play=True)),
                 pystray.MenuItem('View last clip in explorer', lambda: cutter.open_clip(play=False)),
-                pystray.MenuItem('Concatenate two last clips', cutter.concatenate_last_clips),
-                pystray.MenuItem('Delete most recent clip', cutter.delete_clip)
+                pystray.MenuItem('Concatenate two last clips', lambda: cutter.concatenate_last_clips()),
+                pystray.MenuItem('Delete most recent clip', lambda: cutter.delete_clip())
             )
 
             # set up final quick-action and recent-clip menus + setting their location/organization within the full menu
@@ -904,7 +904,7 @@ if __name__ == '__main__':
                 *RECENT_CLIPS_MENU,
                 SEPARATOR,
                 pystray.MenuItem('Check for clips', action=lambda: cutter.set_last_clip(manual_update=True)),
-                pystray.MenuItem('Clear history',   action=cutter.last_clips.clear),
+                pystray.MenuItem('Clear history',   action=lambda: cutter.last_clips.clear()),
                 pystray.MenuItem('Exit', quit_tray)
             )
 
