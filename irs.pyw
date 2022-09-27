@@ -281,6 +281,29 @@ CLIP_BUFFER = max(DEV_MIN_CLIP_OBJECTS, TRAY_RECENT_CLIP_COUNT)
 #get_memory = lambda: psutil.Process().memory_info().rss / (1024 * 1024)
 get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
 
+def verify_ffmpeg():
+    if os.path.exists('ffmpeg.exe'): return
+    else:
+        for path in os.environ.get('PATH', '').split(';'):
+            try:
+                if 'ffmpeg.exe' in os.listdir(path):
+                    return
+            except: pass
+
+    msg = ("FFmpeg was not detected. FFmpeg is required for all of this "
+           "program's editing features. Please ensure `ffmpeg.exe` is "
+           "either in your PATH or in this program's install folder.\n\n"
+           "You can download FFmpeg for Windows here (not clickable, sorry): "
+           "https://www.gyan.dev/ffmpeg/builds/")
+    MessageBox = ctypes.windll.user32.MessageBoxW   # flags are warning symbol + stay on top
+    MessageBox(None, msg, 'Instant Replay Suite — FFmpeg not detected', 0x00040010)
+    raise FileNotFoundError('''\n\n---\n
+FFmpeg was not detected. FFmpeg is required for all of Instant Replay Suite's editing features.
+
+Please ensure `ffmpeg.exe` is either in your PATH or in this program's install folder.
+You can download FFmpeg for Windows from here: https://www.gyan.dev/ffmpeg/builds/\n\n---''')
+
+
 def quit_tray():
     logging.info('Closing system tray icon and exiting suite.')
     tray_icon.visible = False
@@ -696,6 +719,8 @@ class AutoCutter:
 ###########################################################
 if __name__ == '__main__':
     try:
+        verify_ffmpeg()
+        logging.info('FFmpeg installation verified.')
         logging.info(f'Memory usage before initializing AutoCutter class: {get_memory():.2f}mb')
         cutter = AutoCutter()
         logging.info(f'Memory usage after initializing AutoCutter class: {get_memory():.2f}mb')
@@ -886,6 +911,7 @@ if __name__ == '__main__':
         tray_icon = Icon(None, Image.open(ICON_PATH), 'Instant Replay Suite', tray_menu)
 
         # cleanup *some* extraneous dictionaries/collections/functions
+        del verify_ffmpeg
         del get_clip_tray_action
         del title_callback
         del tray_menu
