@@ -1,3 +1,4 @@
 keyboard
 pymediainfo
 pystray
+send2trash

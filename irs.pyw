@@ -54,6 +54,7 @@ RENAME_FORMAT = '?game ?date #?count'
 RENAME_DATE_FORMAT = '%y.%m.%d'     # https://strftime.org/
 RENAME_COUNT_START_NUMBER = 1
 RENAME_COUNT_PADDED_ZEROS = 0
+SEND_DELETED_FILES_TO_RECYCLE_BIN = True
 
 '''
 --- CUSTOM TRAY MENU TUTORIAL ---
@@ -316,8 +317,11 @@ def quit_tray():
 
 
 def delete(path: str):
+    ''' Deletes a clip at the given `path`. '''
     logging.info('Deleting clip: ' + path)
-    try: os.remove(path)
+    try:
+        if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
+        else: os.remove(path)
     except:
         logging.error(f'Error while deleting file {path}: {format_exc()}')
         play_alert('error')
@@ -653,10 +657,11 @@ class AutoCutter:
 
 
     def delete_clip(self, index=-1, patient=True):
+        ''' Deletes a clip at the given `index`. '''
         if patient and not self.wait(alert='Delete'): return    # not a part of get_clip(), to simplify things
         try:
             logging.info(f'Deleting clip at index {index}: {self.last_clips[index].path}')
-            os.remove(self.pop(index).path)                     # pop and remove directly
+            delete(self.pop(index).path)                        # pop and remove directly
             logging.info('Deletion successful.\n')
 
         except IndexError: return
@@ -721,9 +726,12 @@ if __name__ == '__main__':
     try:
         verify_ffmpeg()
         logging.info('FFmpeg installation verified.')
+
         logging.info(f'Memory usage before initializing AutoCutter class: {get_memory():.2f}mb')
         cutter = AutoCutter()
         logging.info(f'Memory usage after initializing AutoCutter class: {get_memory():.2f}mb')
+
+        if SEND_DELETED_FILES_TO_RECYCLE_BIN: import send2trash
 
         # ---------------------
         # Tray-icon functions
