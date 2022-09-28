@@ -54,7 +54,16 @@ RENAME_FORMAT = '?game ?date #?count'
 RENAME_DATE_FORMAT = '%y.%m.%d'     # https://strftime.org/
 RENAME_COUNT_START_NUMBER = 1
 RENAME_COUNT_PADDED_ZEROS = 0
+
 SEND_DELETED_FILES_TO_RECYCLE_BIN = True
+
+LOG_PATH = None
+ICON_PATH = 'icon.ico'
+HISTORY_PATH = 'history.txt'
+RESOURCE_DIR = 'resources'
+
+SAVE_LOG_FILE_TO_APPDATA_FOLDER = False
+SAVE_HISTORY_TO_APPDATA_FOLDER = False
 
 '''
 --- CUSTOM TRAY MENU TUTORIAL ---
@@ -188,9 +197,38 @@ TRAY_ALIGN_CENTER = False
 
 
 # ---------------------
+# Aliases & constants
+# ---------------------
+pjoin = os.path.join
+exists = os.path.exists
+getstat = os.stat
+getsize = os.path.getsize
+basename = os.path.basename
+dirname = os.path.dirname
+abspath = os.path.abspath
+
+USAGE_BAD_TRAY_ITEM_ERROR = '\n\nUsage: {"title of item": "action_of_item"}\n       OR\n       {"title of submenu": {nested_menu}}\n\nNote the colon (:) between the title and it\'s action.'
+CLIP_BUFFER = max(5, TRAY_RECENT_CLIP_COUNT)
+
+CWD = dirname(os.path.realpath(__file__))
+os.chdir(CWD)
+
+APPDATA_PATH = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'instant-replay-suite')
+RESOURCE_DIR = abspath(RESOURCE_DIR)
+if exists(ICON_PATH): ICON_PATH = abspath(ICON_PATH)
+else: ICON_PATH = pjoin(RESOURCE_DIR, 'icon.ico')
+if exists(HISTORY_PATH): HISTORY_PATH = abspath(HISTORY_PATH)
+else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
+
+
+# ---------------------
 # Logging
 # ---------------------
-LOG_PATH = __file__.replace('.pyw', '.log').replace('.py', '.log')
+if not LOG_PATH: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
+if not exists(LOG_PATH):
+    if not SAVE_LOG_FILE_TO_APPDATA_FOLDER: LOG_PATH = abspath(LOG_PATH)
+    else: LOG_PATH = pjoin(APPDATA_PATH, LOG_PATH)
+LOG_PATH = abspath(LOG_PATH)
 logging.basicConfig(
     level=logging.INFO,
     encoding='utf-16',
@@ -202,21 +240,8 @@ logging.basicConfig(
 
 
 # ---------------------
-# Aliases & constants
+# Registry Settings
 # ---------------------
-pjoin = os.path.join
-exists = os.path.exists
-getstat = os.stat
-getsize = os.path.getsize
-basename = os.path.basename
-dirname = os.path.dirname
-abspath = os.path.abspath
-
-CWD = dirname(os.path.realpath(__file__))
-HISTORY_PATH = pjoin(CWD, 'recent_clips.txt')
-RESOURCE_DIR = pjoin(CWD, 'resources')
-ICON_PATH = pjoin(RESOURCE_DIR, 'icon.ico')
-
 # get ShadowPlay video path from registry
 if not VIDEO_PATH_OVERRIDE:
     try:
@@ -270,10 +295,6 @@ else:
         else: MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
     except: logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
 logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
-
-USAGE_BAD_TRAY_ITEM_ERROR = '\n\nUsage: {"title of item": "action_of_item"}\n       OR\n       {"title of submenu": {nested_menu}}\n\nNote the colon (:) between the title and it\'s action.'
-DEV_MIN_CLIP_OBJECTS = 5
-CLIP_BUFFER = max(DEV_MIN_CLIP_OBJECTS, TRAY_RECENT_CLIP_COUNT)
 
 
 # ---------------------
