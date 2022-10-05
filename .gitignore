@@ -132,4 +132,4 @@ dmypy.json
 
 # Instant Replay Suite
 testing
-recent_clips.txt
+*.txt

@@ -26,18 +26,23 @@ tracemalloc.start()                 # start recording memory usage AFTER librari
 # Detecting shadowplay videos via their encoding is possible (but useless) https://github.com/rebane2001/NvidiaInstantRename/blob/mane/InstantRenameCLI.py
 
 '''
-TODO backup system -> keep copy of latest clips and/or latest edits on hand at all times
-TODO add deletion "confirmation" (press delete hotkey twice? add delete submenu for the tray?)
-TODO cropping ability -> pick crop region after saving instant replay OR before starting recording
+TODO extended backup system with more than 1 undo possible at a time
+TODO add deletion "confirmation"? (press delete hotkey twice? add delete submenu for the tray?)
+TODO show what "action" you can undo in the menu in some way (as a submenu?)
 TODO add dedicated config file, possibly separate file for defining tray menu
-TODO pystray subclass/library improvements (https://github.com/moses-palmer/pystray)
-        - add dynamic tooltips (when hovering over icon)
+TODO ability to auto-rename folders using same system as aliases
+TODO cropping ability -> pick crop region after saving instant replay OR before starting recording
+        - have ability to pick region before (?) and after recording
+        - this should be very lightweight and simple -> possible idea:
+            - use ffmpeg to extract a frame from a given clip (if done after recording)
+            - display frame fullscreen, then allow user to draw a region over the frame
+TODO pystray subclass improvements
+        - add dynamic tooltips? (when hovering over icon)
         - add double-click support? https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-lbuttondblclk
             - left-clicks still get registered
             - pystray's _mainloop is blocking
             - an entire thread dedicated to handling double-clicks would likely be needed (unreasonable)
-        - NOTE: You are unlikely to get these (or my auto-updating subclass) accepted
-                into the main library without extensive cross-platform support.
+FIXME: `INSTANT_REPLAY_HOTKEY` suddenly stops working with no error (has only happened once)
 FIXME: Alt + Arrow Keys emits number shortcuts (is it just my keyboard?)
         - Alt + Up    = Alt + 8
         - Alt + Down  = Alt + 2
@@ -57,14 +62,36 @@ RENAME_COUNT_PADDED_ZEROS = 0
 
 SEND_DELETED_FILES_TO_RECYCLE_BIN = True
 
-LOG_PATH = None
-ICON_PATH = 'icon.ico'
-HISTORY_PATH = 'history.txt'
-RESOURCE_DIR = 'resources'
 
+# --- Paths ---
+LOG_PATH = None
+RESOURCE_DIR = 'resources'
+HISTORY_PATH = 'history.txt'
+ICON_PATH = 'icon.ico'
+
+# NOTE: These only apply if the associated path above is not absolute.
 SAVE_LOG_FILE_TO_APPDATA_FOLDER = False
 SAVE_HISTORY_TO_APPDATA_FOLDER = False
 
+
+# --- Hotkeys ---
+CONCATENATE_HOTKEY = 'alt + c'
+DELETE_HOTKEY = 'ctrl + alt + d'
+LENGTH_HOTKEY = 'alt'
+LENGTH_DICTIONARY = {
+    '1': 10,
+    '2': 20,
+    '3': 30,
+    '4': 40,
+    '5': 50,
+    '6': 60,
+    '7': 70,
+    '8': 80,
+    '9': 90
+}
+
+
+# --- Tray Menu ---
 '''
 --- CUSTOM TRAY MENU TUTORIAL ---
 `TRAY_ADVANCED_MODE_MENU` defines the custom tray you wish to use. It's a list
@@ -86,7 +113,7 @@ Normal tray items:
     'delete_most_recent':   Deletes your most recent clip.
     'concatenate_last_two': Concatenates your two most recent clips.
     'clear_history':        Clears your clip history.
-    'update':               Manually checks for recently saved clips. Hopefully not necessary.
+    'update':               Manually checks for new clips and refreshes existing ones.
     'quit':                 Exits this program.
 
 Special tray items:
@@ -160,23 +187,6 @@ TRAY_RECENT_CLIP_DATE_FORMAT = '%#I:%M%p'
 TRAY_RECENT_CLIP_DEFAULT_TEXT = ' --'
 
 
-# --- Hotkeys ---
-CONCATENATE_HOTKEY = 'alt + c'
-DELETE_HOTKEY = 'ctrl + alt + d'
-LENGTH_HOTKEY = 'alt'
-LENGTH_DICTIONARY = {
-    '1': 10,
-    '2': 20,
-    '3': 30,
-    '4': 40,
-    '5': 50,
-    '6': 60,
-    '7': 70,
-    '8': 80,
-    '9': 90
-}
-
-
 # --- Game aliases ---
 GAME_ALIASES = {    # NOTE: the game titles must be lowercase and have no double-spaces
     "left 4 dead": "L4D1",
@@ -206,19 +216,12 @@ getsize = os.path.getsize
 basename = os.path.basename
 dirname = os.path.dirname
 abspath = os.path.abspath
+splitext = os.path.splitext
 
-USAGE_BAD_TRAY_ITEM_ERROR = '\n\nUsage: {"title of item": "action_of_item"}\n       OR\n       {"title of submenu": {nested_menu}}\n\nNote the colon (:) between the title and it\'s action.'
 CLIP_BUFFER = max(5, TRAY_RECENT_CLIP_COUNT)
-
 CWD = dirname(os.path.realpath(__file__))
+APPDATA_PATH = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
 os.chdir(CWD)
-
-APPDATA_PATH = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'instant-replay-suite')
-RESOURCE_DIR = abspath(RESOURCE_DIR)
-if exists(ICON_PATH): ICON_PATH = abspath(ICON_PATH)
-else: ICON_PATH = pjoin(RESOURCE_DIR, 'icon.ico')
-if exists(HISTORY_PATH): HISTORY_PATH = abspath(HISTORY_PATH)
-else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 
 
 # ---------------------
@@ -298,13 +301,24 @@ logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
 
 
 # ---------------------
+# Path cleanup
+# ---------------------
+os.chdir(CWD)   # just to be safe
+RESOURCE_DIR = abspath(RESOURCE_DIR)
+if exists(ICON_PATH): ICON_PATH = abspath(ICON_PATH)
+else: ICON_PATH = pjoin(RESOURCE_DIR, 'icon.ico')
+if exists(HISTORY_PATH): HISTORY_PATH = abspath(HISTORY_PATH)
+else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
+
+
+# ---------------------
 # Utility functions
 # ---------------------
 #get_memory = lambda: psutil.Process().memory_info().rss / (1024 * 1024)
 get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
 
 def verify_ffmpeg():
-    if os.path.exists('ffmpeg.exe'): return
+    if exists('ffmpeg.exe'): return
     else:
         for path in os.environ.get('PATH', '').split(';'):
             try:
@@ -344,7 +358,7 @@ def delete(path: str):
         if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
         else: os.remove(path)
     except:
-        logging.error(f'Error while deleting file {path}: {format_exc()}')
+        logging.error(f'(!) Error while deleting file {path}: {format_exc()}')
         play_alert('error')
 
 
@@ -356,7 +370,7 @@ def play_alert(sound: str) -> bool:
         except:
             winsound.MessageBeep(winsound.MB_ICONHAND)      # play OS error sound
             if sound != 'error':    # intentional error sound (and there's no custom error.wav) -> ignore missing file error
-                logging.error(f'Error while playing sound {path}: {format_exc()}')
+                logging.error(f'(!) Error while playing sound {path}: {format_exc()}')
                 return False
     return True
 
@@ -447,7 +461,7 @@ class Clip:
 
     def __init__(self, path, stat, rename=False):
         self.working = False
-        self.path, self.name = self.rename(path) if rename else (abspath(path), basename(path))   # os.path.abspath for consistent formatting
+        self.path, self.name = self.rename(path) if rename else (abspath(path), basename(path))   # abspath for consistent formatting
         self.time = stat.st_ctime
         self.size = f'{(stat.st_size / 1048576):.1f}mb'
         self.date = datetime.strftime(datetime.fromtimestamp(stat.st_ctime), TRAY_RECENT_CLIP_DATE_FORMAT)
@@ -460,7 +474,7 @@ class Clip:
 
     def refresh(self):
         ''' Refreshes various statistics for the clip, including creation-time, size, and length. '''
-        stat = os.stat(self.path)
+        stat = getstat(self.path)
         self.time = stat.st_ctime
         self.size = f'{(stat.st_size / 1048576):.1f}mb'
         self.length = get_video_duration(self.path)
@@ -471,7 +485,8 @@ class Clip:
 
 
     def rename(self, path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FORMAT):
-        ''' Renames clip according to specified `name_format` and `date_format` based on Shadow Play's default name formatting. '''
+        ''' Renames the clip according to specified `name_format` and
+            `date_format` based on ShadowPlay's default name formatting. '''
         parts = basename(path).split()
         parts[-1] = '.'.join(parts[-1].split('.')[:-3])
 
@@ -517,6 +532,7 @@ class AutoCutter:
     __slots__ = ('waiting_for_clip', 'last_clip_time', 'last_clips')
 
     def __init__(self):
+        start = time.time()
         self.waiting_for_clip = False
         self.last_clip_time = time.time()
         if exists(HISTORY_PATH):
@@ -528,12 +544,12 @@ class AutoCutter:
                 if self.last_clips: logging.info(f'Previous {len(self.last_clips)} clip{"s" if len(self.last_clips) != 1 else ""} loaded: {self.last_clips}')
         else: self.last_clips = []
 
-        keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.set_last_clip)
+        keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.check_for_clips)
         keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
         keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
         for key, length in LENGTH_DICTIONARY.items():
             keyboard.add_hotkey(f'{LENGTH_HOTKEY} + {key}', self.trim_clip, args=(length,))
-        logging.info('Auto-cutter initialized.')
+        logging.info(f'Auto-cutter initialized in {time.time() - start:.2f} seconds.')
 
     # ---------------------
     # Helper methods
@@ -546,14 +562,14 @@ class AutoCutter:
         popped = None
         try:
             popped = last_clips.pop(index)
-            cached_clip_index = -1 * (CLIP_BUFFER + 1)  # +1 to check first clip outside buffer
+            cached_clip_index = -(CLIP_BUFFER + 1)      # +1 to check first clip outside buffer
             while isinstance(cached_clip := last_clips[cached_clip_index], str):    # convert clip to actual Clip object if it's just a string
                 if exists(cached_clip):                 # if cached clip exists, convert to Clip object and break loop
-                    last_clips[cached_clip_index] = Clip(cached_clip, getstat(cached_clip))
+                    last_clips[cached_clip_index] = Clip(cached_clip, getstat(cached_clip), rename=False)
                     break
                 last_clips.pop(cached_clip_index)       # if cached clip doesn't exist, pop and try next clip
         except IndexError: pass                         # IndexError -> pop was out of range, pass and return None
-        except: logging.error(f'Error while popping clip at index {index} <cached_clip_index={cached_clip_index}, len(self.last_clips)={len(self.last_clips)}>: {format_exc()}')
+        except: logging.error(f'(!) Error while popping clip at index {index} <cached_clip_index={cached_clip_index}, len(self.last_clips)={len(self.last_clips)}>: {format_exc()}')
         return popped
 
 
@@ -573,7 +589,7 @@ class AutoCutter:
         return True
 
 
-    def get_clip(self, index, verb=None, alert=None, min_clips=1, patient=True, _recursive=False):    # this function gets rid of ~60 lines of repetitive code
+    def get_clip(self, index, verb=None, alert=None, min_clips=1, patient=True, _recursive=False):
         ''' Safely gets a clip at a specified `index`. Can wait for the clip if `patient` is True, otherwise pulls a clip immediately, which
             is unlikely to return the wrong clip outside of intentional misuse. Plays an associated sound effect with the action we're going to
             perform, if specified with `alert`, and avoids passing this to the wait() method. Plays an  Uses the `verb`, `alert`, and `min_clips`
@@ -598,12 +614,12 @@ class AutoCutter:
     # ---------------------
     # Acquiring clips
     # ---------------------
-    def set_last_clip(self, manual_update=False):
+    def check_for_clips(self, manual_update=False):
         self.waiting_for_clip = True
-        Thread(target=self.set_last_clip_thread, args=(manual_update,), daemon=True).start()
+        Thread(target=self.check_for_clips_thread, args=(manual_update,), daemon=True).start()
 
 
-    def set_last_clip_thread(self, manual_update=False):
+    def check_for_clips_thread(self, manual_update=False):
         try:
             if not manual_update:
                 logging.info('Instant replay detected! Waiting 3 seconds...')
@@ -618,7 +634,7 @@ class AutoCutter:
                     if last_clip_time < stat.st_ctime:
                         logging.info(f'New video detected: {file}')
                         while get_video_duration(path) == 0:
-                            print('VIDEO IS 0')
+                            logging.debug(f'VIDEO DURATION IS 0 ({path})')
                             time.sleep(0.2)
 
                         clip = Clip(path, stat, rename=RENAME)
@@ -628,10 +644,12 @@ class AutoCutter:
                         if manual_update: continue
                         else: return
         except:
-            logging.error(f'Error while setting last clip: {format_exc()}')
+            logging.error(f'(!) Error while checking for new clips: {format_exc()}')
             play_alert('error')
         finally:
-            if manual_update: self.last_clips.sort(key=lambda clip: clip.time)
+            if manual_update:
+                self.last_clips.sort(key=lambda clip: clip.time)
+                logging.info('Manual scan complete.')
             self.waiting_for_clip = False
 
     # ---------------------
@@ -645,7 +663,7 @@ class AutoCutter:
 
         except (IndexError, AssertionError): return
         except:
-            logging.error(f'Error while cutting last clip: {format_exc()}')
+            logging.error(f'(!) Error while cutting last clip: {format_exc()}')
             play_alert('error')
 
 
@@ -687,7 +705,7 @@ class AutoCutter:
 
         except IndexError: return
         except:
-            logging.error(f'Error while deleting last clip: {format_exc()}')
+            logging.error(f'(!) Error while deleting last clip: {format_exc()}')
             play_alert('error')
 
 
@@ -701,7 +719,7 @@ class AutoCutter:
 
         except (IndexError, AssertionError): return
         except:
-            logging.error(f'Error while cutting last clip: {format_exc()}')
+            logging.error(f'(!) Error while cutting last clip: {format_exc()}')
             play_alert('error')
 
 
@@ -711,20 +729,20 @@ class AutoCutter:
             clip.working = True
             try: Thread(target=self.compress_clip_thread, args=(clip,), daemon=True).start()
             except:
-                logging.error(f'Error while creating compression thread: {format_exc()}')
+                logging.error(f'(!) Error while creating compression thread: {format_exc()}')
                 play_alert('error')
             finally: clip.working = False
 
         except (IndexError, AssertionError): pass
         except:
-            logging.error(f'Error while cutting last clip: {format_exc()}')
+            logging.error(f'(!) Error while cutting last clip: {format_exc()}')
             play_alert('error')
 
 
     def compress_clip_thread(self, clip: Clip):
         try:
             clip.working = True
-            base, ext = os.path.splitext(clip.path)
+            base, ext = splitext(clip.path)
             old_path = clip.path
             new_path = f'{base} (compressing...){ext}'
             clip.path = new_path
@@ -736,7 +754,7 @@ class AutoCutter:
             clip.path = old_path
             clip.refresh()
         except:
-            logging.error(f'Error while compressing clip: {format_exc()}')
+            logging.error(f'(!) Error while compressing clip: {format_exc()}')
             play_alert('error')
         finally:
             clip.working = False
@@ -793,7 +811,7 @@ if __name__ == '__main__':
                         .replace('?clipdir', os.sep.join(clip.path.split(os.sep)[-2:]) if '?clipdir' in format else '')
                         .replace('?clip', clip.name))
             except IndexError: return default
-            except: logging.error(f'Error while generating title for system tray clip {clip} at index {index}: {cutter.last_clips} {format_exc()}')
+            except: logging.error(f'(!) Error while generating title for system tray clip {clip} at index {index}: {cutter.last_clips} {format_exc()}')
 
 
         def get_clip_tray_action(index: int):
@@ -843,7 +861,7 @@ if __name__ == '__main__':
             'delete_most_recent':   lambda: cutter.delete_clip(),               # small RAM drop by making these not lambdas
             'concatenate_last_two': lambda: cutter.concatenate_last_clips(),    # 26.0mb -> 25.8mb on average
             'clear_history':        lambda: cutter.last_clips.clear(),
-            'update':               lambda: cutter.set_last_clip(manual_update=True),
+            'update':               lambda: cutter.check_for_clips(manual_update=True),
             'quit':                 quit_tray,
         }
 
@@ -862,7 +880,10 @@ if __name__ == '__main__':
             def evaluate_menu(items, menu):     # function for recursively solving menus/submenus and exporting them to a list
                 global exit_item_exists
                 for item_dict in items:
-                    assert not isinstance(item_dict, set), f'Tray item {item_dict} is improperly written. {USAGE_BAD_TRAY_ITEM_ERROR}'
+                    assert not isinstance(item_dict, set), (f'Tray item {item_dict} is improperly written.\n\n'
+                                                            'Usage: {"title of item": "action_of_item"}\n       '
+                                                            'OR\n       {"title of submenu": {nested_menu}}\n\n'
+                                                            'Note the colon (:) between the title and it\'s action.')
                     if isinstance(item_dict, str):
                         item = item_dict.strip().lower()
                         if item == 'separator': menu.append(SEPARATOR)
@@ -879,10 +900,10 @@ if __name__ == '__main__':
                                 menu.append(pystray.MenuItem(get_mem_title(name), None, enabled=False))
                                 continue
                             elif action == 'recent_clips':
-                                action = (action,)  # set action as tuple and raise AttributeError to read it as a submenu
+                                action = (action,)      # set action as tuple and raise AttributeError to read it as a submenu
                                 raise AttributeError
                             menu.append(pystray.MenuItem(name, action=TRAY_ACTIONS[action]))
-                        except AttributeError:      # AttributeError -> item is a submenu
+                        except AttributeError:          # AttributeError -> item is a submenu
                             if isinstance(action, list) or isinstance(action, tuple):
                                 submenu = []
                                 evaluate_menu(action, submenu)
@@ -924,17 +945,10 @@ if __name__ == '__main__':
                 SEPARATOR,
                 *RECENT_CLIPS_MENU,
                 SEPARATOR,
-                pystray.MenuItem('Check for clips', action=lambda: cutter.set_last_clip(manual_update=True)),
+                pystray.MenuItem('Check for clips', action=lambda: cutter.check_for_clips(manual_update=True)),
                 pystray.MenuItem('Clear history',   action=lambda: cutter.last_clips.clear()),
                 pystray.MenuItem('Exit', quit_tray)
             )
-
-        #CreateIconFromResourceEx = windll.user32.CreateIconFromResourceEx
-        #size_x, size_y = 32, 32
-        #LR_DEFAULTCOLOR = 0
-        #with open(ICON_PATH, "rb") as f:
-        #    png = f.read()
-        #hicon = CreateIconFromResourceEx(png, len(png), 1, 0x30000, size_x, size_y, LR_DEFAULTCOLOR)
 
         # create system tray icon
         tray_icon = Icon(None, Image.open(ICON_PATH), 'Instant Replay Suite', tray_menu)
@@ -961,8 +975,10 @@ if __name__ == '__main__':
         logging.info(f'Memory usage before initializing system tray icon: {get_memory():.2f}mb')
 
         # finally, run system tray icon
+        logging.info('Running.')
         tray_icon.run()
+    except SystemExit: pass
     except:
-        logging.error(f'Error while initalizing Instant Replay Suite: {format_exc()}')
+        logging.critical(f'(!) Error while initalizing Instant Replay Suite: {format_exc()}')
         play_alert('error')
         time.sleep(2.5)   # sleep to give error sound time to play
