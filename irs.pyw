@@ -60,6 +60,7 @@ RENAME_DATE_FORMAT = '%y.%m.%d'     # https://strftime.org/
 RENAME_COUNT_START_NUMBER = 1
 RENAME_COUNT_PADDED_ZEROS = 0
 
+CHECK_FOR_NEW_CLIPS_ON_LAUNCH = True
 SEND_DELETED_FILES_TO_RECYCLE_BIN = True
 
 
@@ -570,15 +571,42 @@ class AutoCutter:
     def __init__(self):
         start = time.time()
         self.waiting_for_clip = False
-        self.last_clip_time = time.time()
         if exists(HISTORY_PATH):
             with open(HISTORY_PATH, 'r') as history:
                 # get all valid paths from history file, create a buffer of clip objects, then start caching paths as strings outside buffer
                 lines = (path for path in reversed(history.read().splitlines()) if path and exists(path))   # reversed() is an iterable, not an actual list
-                self.last_clips = [Clip(p, getstat(p)) if i <= CLIP_BUFFER else p for i, p in enumerate(lines)]
-                self.last_clips.reverse()                   # .reverse() is a very fast operation
-                if self.last_clips: logging.info(f'Previous {len(self.last_clips)} clip{"s" if len(self.last_clips) != 1 else ""} loaded: {self.last_clips}')
-        else: self.last_clips = []
+                logging.info(f'History file parsed in {time.time() - start:.3f} seconds.')
+
+                last_clips = [Clip(path, getstat(path)) if index <= CLIP_BUFFER else path for index, path in enumerate(lines)]
+                last_clips.reverse()                        # .reverse() is a very fast operation
+                if last_clips: logging.info(f'Previous {len(last_clips)} clip{"s" if len(last_clips) != 1 else ""} loaded: {last_clips}')
+                else: logging.info('No previous clips detected.')
+                logging.info(f'Previous clips loaded in {time.time() - start:.2f} seconds.')
+
+                self.last_clips = last_clips
+                if CHECK_FOR_NEW_CLIPS_ON_LAUNCH:
+                    self.last_clip_time = getstat(last_clips[-1].path).st_ctime
+                    self.check_for_clips(manual_update=True)
+                del lines
+        else:
+            self.last_clips = []
+            msg = ("It appears to be your first time running Instant Replay Suite "
+                   "(or you deleted your history file). Please review your hotkey "
+                   "and renaming settings and restart if necessary.\n\nWould you "
+                   "like to organize, rename, and add all existing clips in "
+                   f"{VIDEO_PATH}? Click cancel to exit Instant Replay Suite.")
+            MessageBox = ctypes.windll.user32.MessageBoxW   # flags are ?-symbol, stay on top, Yes/No/Cancel
+            response = MessageBox(None, msg, 'Welcome to Instant Replay Suite', 0x00040023)
+            if response == 2:               # Cancel/X
+                logging.info('Cancel selected on welcome dialog, closing...')
+                exit(2)
+            elif response == 7:             # No
+                logging.info('No selected on welcome dialog, not retroactively adding clips.')
+                self.last_clip_time = time.time()
+            elif response == 6:             # Yes
+                logging.info('Yes selected on welcome dialog, looking for pre-existing clips...')
+                self.last_clip_time = 0     # set last_clip_time to 0 so all .mp4 files are valid
+                self.check_for_clips(manual_update=True)
 
         keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.check_for_clips)
         keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
