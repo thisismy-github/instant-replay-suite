@@ -69,11 +69,13 @@ LOG_PATH = None
 BACKUP_DIR = 'Backups'
 RESOURCE_DIR = 'resources'
 HISTORY_PATH = 'history.txt'
+UNDO_LIST_PATH = 'undo.txt'
 ICON_PATH = 'icon.ico'
 
 # NOTE: These only apply if the associated path above is not absolute.
 SAVE_LOG_FILE_TO_APPDATA_FOLDER = False
 SAVE_HISTORY_TO_APPDATA_FOLDER = False
+SAVE_UNDO_LIST_TO_APPDATA_FOLDER = False
 SAVE_BACKUPS_TO_APPDATA_FOLDER = False
 SAVE_BACKUPS_TO_VIDEO_FOLDER = False
 
@@ -84,6 +86,7 @@ IGNORE_VIDEOS_IN_THESE_FOLDERS = []
 # --- Hotkeys ---
 CONCATENATE_HOTKEY = 'alt + c'
 DELETE_HOTKEY = 'ctrl + alt + d'
+UNDO_HOTKEY = 'alt + u'
 LENGTH_HOTKEY = 'alt'
 LENGTH_DICTIONARY = {
     '1': 10,
@@ -119,6 +122,7 @@ Normal tray items:
     'explore_most_recent':  Opens your most recent clip in Explorer.
     'delete_most_recent':   Deletes your most recent clip.
     'concatenate_last_two': Concatenates your two most recent clips.
+    'undo':                 Undoes the last trim or concatenation.
     'clear_history':        Clears your clip history.
     'update':               Manually checks for new clips and refreshes existing ones.
     'quit':                 Exits this program.
@@ -160,6 +164,7 @@ TRAY_ADVANCED_MODE_MENU = (
     {'Explore last clip': 'explore_most_recent'},
     {'Splice last clips': 'concatenate_last_two'},
     {'Delete last clip': 'delete_most_recent'},
+    {'Undo last action': 'undo'},
     'separator',
     'recent_clips',
     'separator',
@@ -316,6 +321,8 @@ if exists(ICON_PATH): ICON_PATH = abspath(ICON_PATH)
 else: ICON_PATH = pjoin(RESOURCE_DIR, 'icon.ico')
 if exists(HISTORY_PATH): HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
+if exists(UNDO_LIST_PATH): UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
+else: UNDO_LIST_PATH = pjoin(APPDATA_PATH if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
 
 if exists(BACKUP_DIR): BACKUP_DIR = abspath(BACKUP_DIR)
 elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_DIR = pjoin(VIDEO_PATH, BACKUP_DIR)
@@ -436,6 +443,7 @@ def trim_off_start_in_place(clip: Clip, length: float):
         logging.info(cmd)
         process = subprocess.Popen(cmd, shell=True)
         process.wait()
+        with open(UNDO_LIST_PATH, 'w') as undo: undo.write(f'{basename(temp_path)} -> {clip_path} -> Trimmed to {length:g} seconds\n')
         logging.info(f'Trim to {length} seconds successful.\n')
     except:
         logging.error(f'(!) Error while trimming clip: {format_exc()}')
@@ -611,6 +619,7 @@ class AutoCutter:
         keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.check_for_clips)
         keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
         keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
+        keyboard.add_hotkey(UNDO_HOTKEY, self.undo)
         for key, length in LENGTH_DICTIONARY.items():
             keyboard.add_hotkey(f'{LENGTH_HOTKEY} + {key}', self.trim_clip, args=(length,))
         logging.info(f'Auto-cutter initialized in {time.time() - start:.2f} seconds.')
@@ -653,8 +662,8 @@ class AutoCutter:
         return True
 
 
-    def get_clip(self, index, verb=None, alert=None, min_clips=1, patient=True, _recursive=False):
-        ''' Safely gets a clip at a specified `index`. Can wait for the clip if `patient` is True, otherwise pulls a clip immediately, which
+    def get_clip(self, index=None, path=None, verb=None, alert=None, min_clips=1, patient=True, _recursive=False):
+        ''' Safely gets a clip at a specified `index` or `path`. Can wait for the clip if `patient` is True, otherwise pulls a clip immediately, which
             is unlikely to return the wrong clip outside of intentional misuse. Plays an associated sound effect with the action we're going to
             perform, if specified with `alert`, and avoids passing this to the wait() method. Plays an  Uses the `verb`, `alert`, and `min_clips`
             parameters for waiting and checking if the acquired clip is working. Pops clips if they don't exist anymore. Recursively calls itself
@@ -664,10 +673,22 @@ class AutoCutter:
             if alert is not None: play_alert(str(alert).lower())
             if patient and not self.wait(verb=verb if verb else alert, min_clips=min_clips): return
 
-        clip = self.last_clips[index]
+        if index is not None: clip = self.last_clips[index]
+        elif path is not None:
+            path = abspath(path)
+            for last_clip_index, last_clip in enumerate(self.last_clips):
+                if isinstance(last_clip, Clip):
+                    if last_clip.path == path:
+                        clip = last_clip
+                        index = last_clip_index
+                        break
+                elif last_clip == path:
+                    return path     # `path` in last_clips but as cached string -> return path immediately
+            else: return None       # `path` specified but not present in last_clips -> return None
+
         if not exists(clip.path):
             self.pop(index)
-            if patient: return self.get_clip(index, verb, alert, min_clips, patient, _recursive=True)
+            if patient: return self.get_clip(index, path, verb, alert, min_clips, patient, _recursive=True)
             else:
                 logging.warning(f'Clip at index {index} does not actually exist: {clip.path}')
                 play_alert('error')
@@ -766,6 +787,9 @@ class AutoCutter:
             temp_path2 = pjoin(BACKUP_DIR, f'{time.time_ns()}_2{ext}')
             os.renames(clip_path2, temp_path2)
 
+            with open(UNDO_LIST_PATH, 'w') as undo:
+                undo.write(f'{basename(temp_path1)} -> {basename(temp_path2)} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
+
             os.rename(temp_path, clip_path1)
             self.pop(index)
             clip1.refresh()
@@ -839,6 +863,47 @@ class AutoCutter:
             play_alert('error')
         finally:
             clip.working = False
+
+
+    # TODO what should this do when you undo actions on deleted clips? restore the clip anyways?
+    def undo(self, *args, patient=True):    # NOTE: *args used to capture pystray's unused args
+        try:
+            with open(UNDO_LIST_PATH, 'r') as undo:
+                line = undo.readline().strip().split(' -> ')
+                if len(line) == 3:      # trim
+                    old, new, action = line
+
+                    alert = 'Undoing Trim' if 'trim' in action.lower() else 'Undo'
+                    if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
+
+                    os.remove(new)
+                    os.rename(pjoin(BACKUP_DIR, old), new)
+                    logging.info(f'Undo completed for "{action}" on clip "{new}"')
+                    clip = self.get_clip(path=new)
+                    if isinstance(clip, Clip): clip.refresh()       # refresh clip
+
+                elif len(line) == 5:    # concatenation
+                    old, old2, new, new2, action = line
+
+                    alert = 'Undoing Concatenation' if 'concat' in action.lower() else 'Undo'
+                    if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
+
+                    os.remove(new)
+                    os.rename(pjoin(BACKUP_DIR, old), new)
+                    os.rename(pjoin(BACKUP_DIR, old2), new2)
+
+                    index = self.last_clips.index(new)              # concat removes new2 from the list...
+                    buffer = len(self.last_clips) - CLIP_BUFFER     # ...so new2 needs to be re-added
+                    if index < buffer: self.last_clips.insert(index + 1, new2)  # TODO make sure this math is right
+                    else: self.last_clips.insert(index + 1, Clip(new2, getstat(new2), rename=False))
+
+                    logging.info(f'Undo completed for "{action}" on clips "{new}" and "{new2}"')
+                    clip = self.get_clip(path=new)
+                    if isinstance(clip, Clip): clip.refresh()       # refresh original clip
+            os.remove(UNDO_LIST_PATH)
+        except:
+            logging.error(f'(!) Error while undoing last action: {format_exc()}')
+            play_alert('error')
 
 
 ###########################################################
@@ -943,6 +1008,7 @@ if __name__ == '__main__':
             'concatenate_last_two': lambda: cutter.concatenate_last_clips(),    # 26.0mb -> 25.8mb on average
             'clear_history':        lambda: cutter.last_clips.clear(),
             'update':               lambda: cutter.check_for_clips(manual_update=True),
+            'undo':                 cutter.undo,
             'quit':                 quit_tray,
         }
 
@@ -1002,7 +1068,8 @@ if __name__ == '__main__':
                 pystray.MenuItem('Play most recent clip', lambda: cutter.open_clip(play=True)),
                 pystray.MenuItem('View last clip in explorer', lambda: cutter.open_clip(play=False)),
                 pystray.MenuItem('Concatenate two last clips', lambda: cutter.concatenate_last_clips()),
-                pystray.MenuItem('Delete most recent clip', lambda: cutter.delete_clip())
+                pystray.MenuItem('Delete most recent clip', lambda: cutter.delete_clip()),
+                pystray.MenuItem('Undo most recent action', cutter.undo)
             )
 
             # set up final quick-action and recent-clip menus + setting their location/organization within the full menu
