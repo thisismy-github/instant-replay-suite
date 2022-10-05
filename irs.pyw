@@ -74,6 +74,7 @@ ICON_PATH = 'icon.ico'
 SAVE_LOG_FILE_TO_APPDATA_FOLDER = False
 SAVE_HISTORY_TO_APPDATA_FOLDER = False
 SAVE_BACKUPS_TO_APPDATA_FOLDER = False
+SAVE_BACKUPS_TO_VIDEO_FOLDER = False
 
 
 # --- Hotkeys ---
@@ -313,8 +314,24 @@ if exists(HISTORY_PATH): HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 
 if exists(BACKUP_DIR): BACKUP_DIR = abspath(BACKUP_DIR)
+elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_DIR = pjoin(VIDEO_PATH, BACKUP_DIR)
 elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_DIR = pjoin(APPDATA_PATH, BACKUP_DIR)
 else: BACKUP_DIR = pjoin(CWD, BACKUP_DIR)
+
+# VIDEO_PATH and BACKUP_DIR must be on the same drive or we'll get OSError 17
+if (os.path.splitdrive(VIDEO_PATH)[0] != os.path.splitdrive(BACKUP_DIR)[0]
+    or os.path.ismount(VIDEO_PATH) != os.path.ismount(BACKUP_DIR)):
+    msg = ("Your video folder and the path for saving temporary "
+           "backups are not on the same drive. Instant Replay Suite "
+           "cannot backup and restore videos across drives without "
+           "copying them back and forth.\n\nVideo folder: "
+           f"{VIDEO_PATH}\nBackup folder: {BACKUP_DIR}\n\nPlease "
+           "set `SAVE_BACKUPS_TO_VIDEO_FOLDER` or specify an "
+           "absolute path for `BACKUP_DIR` on the same drive.")
+    MessageBox = ctypes.windll.user32.MessageBoxW   # flags are !-symbol + stay on top
+    MessageBox(None, msg, 'Invalid Backup Directory', 0x00040030)
+    logging.error(msg)
+    exit(17)
 
 if not exists(BACKUP_DIR): os.makedirs(BACKUP_DIR)
 
