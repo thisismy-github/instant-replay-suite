@@ -76,6 +76,9 @@ SAVE_HISTORY_TO_APPDATA_FOLDER = False
 SAVE_BACKUPS_TO_APPDATA_FOLDER = False
 SAVE_BACKUPS_TO_VIDEO_FOLDER = False
 
+# NOTE: Subfolders only, i.e. ['Other', 'Movies']. Not case-sensitive.
+IGNORE_VIDEOS_IN_THESE_FOLDERS = []
+
 
 # --- Hotkeys ---
 CONCATENATE_HOTKEY = 'alt + c'
@@ -317,6 +320,9 @@ if exists(BACKUP_DIR): BACKUP_DIR = abspath(BACKUP_DIR)
 elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_DIR = pjoin(VIDEO_PATH, BACKUP_DIR)
 elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_DIR = pjoin(APPDATA_PATH, BACKUP_DIR)
 else: BACKUP_DIR = pjoin(CWD, BACKUP_DIR)
+
+if isinstance(IGNORE_VIDEOS_IN_THESE_FOLDERS, str): IGNORE_VIDEOS_IN_THESE_FOLDERS = (IGNORE_VIDEOS_IN_THESE_FOLDERS,)
+IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(path.strip().lower() for path in IGNORE_VIDEOS_IN_THESE_FOLDERS)
 
 # VIDEO_PATH and BACKUP_DIR must be on the same drive or we'll get OSError 17
 if (os.path.splitdrive(VIDEO_PATH)[0] != os.path.splitdrive(BACKUP_DIR)[0]
@@ -658,6 +664,8 @@ class AutoCutter:
             logging.info(f'Scanning {VIDEO_PATH} for videos')
             last_clip_time = self.last_clip_time    # alias for optimization
             for root, _, files in os.walk(VIDEO_PATH):
+                if basename(root).lower() in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
+                if root == BACKUP_DIR: continue
                 for file in files:
                     path = pjoin(root, file)
                     stat = getstat(path)
