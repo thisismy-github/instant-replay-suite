@@ -65,6 +65,7 @@ SEND_DELETED_FILES_TO_RECYCLE_BIN = True
 
 # --- Paths ---
 LOG_PATH = None
+BACKUP_DIR = 'Backups'
 RESOURCE_DIR = 'resources'
 HISTORY_PATH = 'history.txt'
 ICON_PATH = 'icon.ico'
@@ -72,6 +73,7 @@ ICON_PATH = 'icon.ico'
 # NOTE: These only apply if the associated path above is not absolute.
 SAVE_LOG_FILE_TO_APPDATA_FOLDER = False
 SAVE_HISTORY_TO_APPDATA_FOLDER = False
+SAVE_BACKUPS_TO_APPDATA_FOLDER = False
 
 
 # --- Hotkeys ---
@@ -310,6 +312,12 @@ else: ICON_PATH = pjoin(RESOURCE_DIR, 'icon.ico')
 if exists(HISTORY_PATH): HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 
+if exists(BACKUP_DIR): BACKUP_DIR = abspath(BACKUP_DIR)
+elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_DIR = pjoin(APPDATA_PATH, BACKUP_DIR)
+else: BACKUP_DIR = pjoin(CWD, BACKUP_DIR)
+
+if not exists(BACKUP_DIR): os.makedirs(BACKUP_DIR)
+
 
 # ---------------------
 # Utility functions
@@ -387,24 +395,29 @@ def ffmpeg(out, cmd):
     logging.info('ffmpeg operation successful.')
 
 
-def trim_off_start_in_place(clip: Clip, length: float):     # see old_instant_replay_suite.py for path-only version
-    assert exists(clip.path), f'Path {clip.path} does not exist!'
+def trim_off_start_in_place(clip: Clip, length: float):
+    clip_path = clip.path
+    assert exists(clip_path), f'Path {clip_path} does not exist!'
     logging.info(f'Trimming clip {clip.name} to {length} seconds')
-    if clip.length <= length: return logging.info(f'(?) Video is only {clip.length:.2f} seconds long and cannot be trimmed to {length} seconds.')
     logging.info(f'Clip is {clip.length:.2f} seconds long.')
+    if clip.length <= length: return logging.info(f'(?) Video is only {clip.length:.2f} seconds long and cannot be trimmed to {length} seconds.')
 
-    base, ext = os.path.splitext(clip.path)
-    temp_path = f'{base}_temp{ext}'
-    shutil.copy2(clip.path, temp_path)
+    ext = splitext(clip_path)[-1]
+    temp_path = pjoin(BACKUP_DIR, f'{time.time_ns()}{ext}')
+    os.renames(clip_path, temp_path)
 
-    #ffmpeg(clip.path, f'-i "%tp" -ss {clip.length - length} -c:v copy -c:a copy "{clip.path}"')
-    cmd = f'ffmpeg -y -i "{temp_path}" -ss {clip.length - length} -c:v copy -c:a copy "{clip.path}" -hide_banner -loglevel warning'
-    logging.info(cmd)
-    process = subprocess.Popen(cmd, shell=True)
-    process.wait()
-    try: os.remove(temp_path)
-    except: logging.error(f'Error while deleting temporary file {temp_path}: {format_exc()}')
-    logging.info(f'Trim to {length} seconds successful.\n')
+    try:
+        #ffmpeg(clip_path, f'-i "%tp" -ss {clip.length - length} -c:v copy -c:a copy "{clip_path}"')
+        cmd = f'ffmpeg -y -i "{temp_path}" -ss {clip.length - length} -c:v copy -c:a copy "{clip_path}" -hide_banner -loglevel warning'
+        logging.info(cmd)
+        process = subprocess.Popen(cmd, shell=True)
+        process.wait()
+        logging.info(f'Trim to {length} seconds successful.\n')
+    except:
+        logging.error(f'(!) Error while trimming clip: {format_exc()}')
+        if exists(clip_path): os.remove(clip_path)
+        os.rename(temp_path, clip_path)
+        logging.info('Successfully restored clip after error.')
 
 
 def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
@@ -668,30 +681,45 @@ class AutoCutter:
 
 
     def concatenate_last_clips(self, index=-1, patient=True):
+        ''' 1. Get clip at `index` and clip just before that
+            2. Write clip paths to a text file
+            3. Concat files to a third temporary file using FFmpeg
+            4. Delete text file and move original clips to backup folder
+            5. Rename temporary file to the second clip's name
+            6. Remove clip at `index` from recent clips and refresh '''
         try:
             clip1 = self.get_clip(index=index - 1, alert='Concatenate', min_clips=1, patient=patient)
             clip2 = self.get_clip(index=index, min_clips=2, patient=patient)
-            clip1path = clip1.path         # these could be popped here, but it's safer and simpler to do it this way
-            clip2path = clip2.path
+            clip_path1 = clip1.path
+            clip_path2 = clip2.path
 
-            base, ext = os.path.splitext(clip1path)
+            base, ext = splitext(clip_path1)
             temp_path = f'{base}_concat{ext}'
             text_path = f'{base}_concatlist.txt'    # write list of clips to text file (with / as separator and single quotes to avoid ffmpeg errors)
 
-            with open(text_path, 'w') as txt: txt.write(f"file '{clip1path.replace(os.sep, '/')}'\nfile '{clip2path.replace(os.sep, '/')}'")
+            with open(text_path, 'w') as txt:
+                txt.write(f"file '{clip_path1.replace(os.sep, '/')}'\nfile '{clip_path2.replace(os.sep, '/')}'")
+
             cmd = f'ffmpeg -y -f concat -safe 0 -i "{text_path}" -c copy "{temp_path}" -hide_banner -loglevel warning'
             logging.info(cmd)
             process = subprocess.Popen(cmd, shell=True)
             process.wait()
 
-            for file in (clip1path, clip2path, text_path): delete(file)
-            os.rename(temp_path, clip1path)
-            self.pop()
+            delete(text_path)
+            ext = splitext(clip_path1)[-1]
+            temp_path1 = pjoin(BACKUP_DIR, f'{time.time_ns()}_1{ext}')
+            os.renames(clip_path1, temp_path1)
+            ext = splitext(clip_path2)[-1]
+            temp_path2 = pjoin(BACKUP_DIR, f'{time.time_ns()}_2{ext}')
+            os.renames(clip_path2, temp_path2)
+
+            os.rename(temp_path, clip_path1)
+            self.pop(index)
             clip1.refresh()
             logging.info('Clips concatenated, renamed, popped, refreshed, and cleaned up successfully.')
         except AssertionError: return
         except:
-            logging.error(f'Error while concatenating last two clips: {format_exc()}')
+            logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
             play_alert('error')
 
 
