@@ -611,8 +611,13 @@ class AutoCutter:
         self.waiting_for_clip = False
         if exists(HISTORY_PATH):
             with open(HISTORY_PATH, 'r') as history:
-                # get all valid paths from history file, create a buffer of clip objects, then start caching paths as strings outside buffer
-                lines = (path for path in reversed(history.read().splitlines()) if path and exists(path))   # reversed() is an iterable, not an actual list
+                # get all valid unique paths from history file, create a buffer of clip objects, then start caching paths as strings outside buffer
+                lines = []
+                addpath = lines.append
+                for path in reversed(history.read().splitlines()):      # reversed() is an iterable, not an actual list (no performance loss)
+                    if path and exists(path) and path not in lines:
+                        addpath(path)
+
                 logging.info(f'History file parsed in {time.time() - start:.3f} seconds.')
 
                 last_clips = [Clip(path, getstat(path)) if index <= CLIP_BUFFER else path for index, path in enumerate(lines)]
