@@ -526,40 +526,43 @@ class Clip:
         length_int = int(self.length)
         self.length_string = f'{length_int // 60}:{length_int % 60:02}'
         self.length_size_string = f'Length: {self.length_string} ({self.size})'
-        gc.collect(generation=2)
 
 
     def rename(self, path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FORMAT):
         ''' Renames the clip according to specified `name_format` and
             `date_format` based on ShadowPlay's default name formatting. '''
-        parts = basename(path).split()
-        parts[-1] = '.'.join(parts[-1].split('.')[:-3])
+        try:
+            parts = basename(path).split()
+            parts[-1] = '.'.join(parts[-1].split('.')[:-3])
 
-        date_string = ' '.join(parts[-3:])
-        date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
-        game = ' '.join(parts[:-3])
-        if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
+            date_string = ' '.join(parts[-3:])
+            date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
+            game = ' '.join(parts[:-3])
+            if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
 
-        renamed_base_no_ext = name_format.replace('?game', game).replace('?date', date.strftime(date_format))
-        renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
-        renamed_path = f'{renamed_path_no_ext}.mp4'
+            renamed_base_no_ext = name_format.replace('?game', game).replace('?date', date.strftime(date_format))
+            renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
+            renamed_path = f'{renamed_path_no_ext}.mp4'
 
-        count_detected = '?count' in renamed_path_no_ext
-        if count_detected or exists(renamed_path):
-            count = RENAME_COUNT_START_NUMBER
-            if not count_detected:      # if forced to add a number, use windows-style count: start from (2)
-                count = 2
-                renamed_path_no_ext = f'{renamed_path_no_ext} (?count)'
-            while True:
-                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
-                renamed_path = f'{renamed_path_no_ext.replace("?count", count_string)}.mp4'
-                if not exists(renamed_path): break
-                count += 1
-        renamed_base = basename(renamed_path)
-        logging.info(f'Renaming video to: {renamed_base}')
-        os.rename(path, renamed_path)
-        logging.info('Rename successful.')
-        return abspath(renamed_path), renamed_base      # use os.path.abspath to ensure consistent path formatting later on
+            count_detected = '?count' in renamed_path_no_ext
+            if count_detected or exists(renamed_path):
+                count = RENAME_COUNT_START_NUMBER
+                if not count_detected:      # if forced to add a number, use windows-style count: start from (2)
+                    count = 2
+                    renamed_path_no_ext = f'{renamed_path_no_ext} (?count)'
+                while True:
+                    count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
+                    renamed_path = f'{renamed_path_no_ext.replace("?count", count_string)}.mp4'
+                    if not exists(renamed_path): break
+                    count += 1
+            renamed_base = basename(renamed_path)
+            logging.info(f'Renaming video to: {renamed_base}')
+            os.rename(path, renamed_path)
+            logging.info('Rename successful.')
+            return abspath(renamed_path), renamed_base      # use abspath to ensure consistent path formatting later on
+        except Exception as error:
+            logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
+            return path, basename(path)
 
 
     def is_working(self, verb):
@@ -717,8 +720,8 @@ class AutoCutter:
                 if root == BACKUP_DIR: continue
                 for file in files:
                     path = pjoin(root, file)
-                    stat = getstat(path)
-                    if last_clip_time < stat.st_ctime:
+                    stat = getstat(path)            # ↓ skip non-mp4 files ↓
+                    if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
                         logging.info(f'New video detected: {file}')
                         while get_video_duration(path) == 0:
                             logging.debug(f'VIDEO DURATION IS 0 ({path})')
@@ -735,9 +738,10 @@ class AutoCutter:
             play_alert('error')
         finally:
             if manual_update:
-                self.last_clips.sort(key=lambda clip: clip.time)
+                self.last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
                 logging.info('Manual scan complete.')
             self.waiting_for_clip = False
+            gc.collect(generation=2)
 
     # ---------------------
     # Clip actions
