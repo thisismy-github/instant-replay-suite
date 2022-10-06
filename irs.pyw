@@ -220,7 +220,7 @@ TRAY_ALIGN_CENTER = False
 
 
 # ---------------------
-# Aliases & constants
+# Aliases
 # ---------------------
 pjoin = os.path.join
 exists = os.path.exists
@@ -230,21 +230,41 @@ basename = os.path.basename
 dirname = os.path.dirname
 abspath = os.path.abspath
 splitext = os.path.splitext
+splitdrive = os.path.splitdrive
 
+
+# ---------------------
+# Constants & paths
+# ---------------------
 CLIP_BUFFER = max(5, TRAY_RECENT_CLIP_COUNT)
 CWD = dirname(os.path.realpath(__file__))
-APPDATA_PATH = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
 os.chdir(CWD)
+
+APPDATA_PATH = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
+RESOURCE_DIR = abspath(RESOURCE_DIR)
+
+if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
+else: ICON_PATH = pjoin(RESOURCE_DIR if exists(RESOURCE_DIR) else CWD, 'icon.ico')
+if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
+else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
+if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
+else: UNDO_LIST_PATH = pjoin(APPDATA_PATH if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
+if not LOG_PATH: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
+if splitdrive(LOG_PATH)[0]: LOG_PATH = abspath(LOG_PATH)
+else: LOG_PATH = pjoin(APPDATA_PATH if SAVE_LOG_FILE_TO_APPDATA_FOLDER else CWD, LOG_PATH)
+
+assert exists(ICON_PATH), f'No icon exists at {ICON_PATH}!'
+if not exists(dirname(HISTORY_PATH)): os.makedirs(dirname(HISTORY_PATH))
+if not exists(dirname(UNDO_LIST_PATH)): os.makedirs(dirname(UNDO_LIST_PATH))
+if not exists(dirname(LOG_PATH)): os.makedirs(dirname(LOG_PATH))
+
+if isinstance(IGNORE_VIDEOS_IN_THESE_FOLDERS, str): IGNORE_VIDEOS_IN_THESE_FOLDERS = (IGNORE_VIDEOS_IN_THESE_FOLDERS,)
+IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(path.strip().lower() for path in IGNORE_VIDEOS_IN_THESE_FOLDERS)
 
 
 # ---------------------
 # Logging
 # ---------------------
-if not LOG_PATH: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
-if not exists(LOG_PATH):
-    if not SAVE_LOG_FILE_TO_APPDATA_FOLDER: LOG_PATH = abspath(LOG_PATH)
-    else: LOG_PATH = pjoin(APPDATA_PATH, LOG_PATH)
-LOG_PATH = abspath(LOG_PATH)
 logging.basicConfig(
     level=logging.INFO,
     encoding='utf-16',
@@ -314,28 +334,16 @@ logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
 
 
 # ---------------------
-# Path cleanup
+# Backup dir cleanup
 # ---------------------
-os.chdir(CWD)   # just to be safe
-RESOURCE_DIR = abspath(RESOURCE_DIR)
-if exists(ICON_PATH): ICON_PATH = abspath(ICON_PATH)
-else: ICON_PATH = pjoin(RESOURCE_DIR, 'icon.ico')
-if exists(HISTORY_PATH): HISTORY_PATH = abspath(HISTORY_PATH)
-else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
-if exists(UNDO_LIST_PATH): UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
-else: UNDO_LIST_PATH = pjoin(APPDATA_PATH if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
-
 if exists(BACKUP_DIR): BACKUP_DIR = abspath(BACKUP_DIR)
 elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_DIR = pjoin(VIDEO_PATH, BACKUP_DIR)
 elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_DIR = pjoin(APPDATA_PATH, BACKUP_DIR)
 else: BACKUP_DIR = pjoin(CWD, BACKUP_DIR)
 
-if isinstance(IGNORE_VIDEOS_IN_THESE_FOLDERS, str): IGNORE_VIDEOS_IN_THESE_FOLDERS = (IGNORE_VIDEOS_IN_THESE_FOLDERS,)
-IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(path.strip().lower() for path in IGNORE_VIDEOS_IN_THESE_FOLDERS)
-
 # VIDEO_PATH and BACKUP_DIR must be on the same drive or we'll get OSError 17
-if (os.path.splitdrive(VIDEO_PATH)[0] != os.path.splitdrive(BACKUP_DIR)[0]
-    or os.path.ismount(VIDEO_PATH) != os.path.ismount(BACKUP_DIR)):
+if (splitdrive(VIDEO_PATH)[0] != splitdrive(BACKUP_DIR)[0] or
+    os.path.ismount(VIDEO_PATH) != os.path.ismount(BACKUP_DIR)):
     msg = ("Your video folder and the path for saving temporary "
            "backups are not on the same drive. Instant Replay Suite "
            "cannot backup and restore videos across drives without "
