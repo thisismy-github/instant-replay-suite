@@ -63,6 +63,7 @@ RENAME_COUNT_PADDED_ZEROS = 0
 
 CHECK_FOR_NEW_CLIPS_ON_LAUNCH = True
 SEND_DELETED_FILES_TO_RECYCLE_BIN = True
+MAX_BACKUPS = 5
 
 
 # --- Paths ---
@@ -423,6 +424,21 @@ def play_alert(sound: str) -> bool:
     return True
 
 
+def refresh_backups(*paths):
+    ''' Deletes outdated backup files. Ignores `paths` while counting,
+        even if `MAX_BACKUPS` is 0. Assumes all backups use the format
+        "{time.time_ns()}*.mp4". '''
+    old_backups = 0
+    for filename in reversed(os.listdir(BACKUP_DIR)):
+        if filename[-4:] != '.txt' and filename[:19].isnumeric():
+            path = pjoin(BACKUP_DIR, filename)
+            if path not in paths:
+                old_backups += 1
+                if old_backups >= MAX_BACKUPS:
+                    try: os.remove(path)
+                    except: logging.warning(f'Failed to delete outdated backup "{path}": {format_exc()}')
+
+
 def ffmpeg(out, cmd):
     temp_path = f'{out[:-4]}_temp.mp4'
     shutil.copy2(out, temp_path)
@@ -453,6 +469,7 @@ def trim_off_start_in_place(clip: Clip, length: float):
         process = subprocess.Popen(cmd, shell=True)
         process.wait()
         with open(UNDO_LIST_PATH, 'w') as undo: undo.write(f'{basename(temp_path)} -> {clip_path} -> Trimmed to {length:g} seconds\n')
+        refresh_backups(temp_path)
         setctime(clip_path, getstat(temp_path).st_ctime)    # ensure edited clip retains original creation time
         logging.info(f'Trim to {length} seconds successful.\n')
     except:
@@ -803,6 +820,7 @@ class AutoCutter:
 
             with open(UNDO_LIST_PATH, 'w') as undo:
                 undo.write(f'{basename(temp_path1)} -> {basename(temp_path2)} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
+            refresh_backups(temp_path1, temp_path2)
 
             os.rename(temp_path, clip_path1)
             setctime(clip_path1, getstat(temp_path1).st_ctime)  # ensure edited clip retains original creation time
