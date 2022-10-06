@@ -20,6 +20,7 @@ from threading import Thread        # 0.125mb / 13.475mb
 
 import ctypes
 from pystray._util import win32
+from win32_setctime import setctime
 tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 # Starts with roughly ~36.7mb of memory usage. Roughly 9.78mb combined from imports alone, without psutil and cv2/pymediainfo (9.63mb w/o tracemalloc).
@@ -444,6 +445,7 @@ def trim_off_start_in_place(clip: Clip, length: float):
         process = subprocess.Popen(cmd, shell=True)
         process.wait()
         with open(UNDO_LIST_PATH, 'w') as undo: undo.write(f'{basename(temp_path)} -> {clip_path} -> Trimmed to {length:g} seconds\n')
+        setctime(clip_path, getstat(temp_path).st_ctime)    # ensure edited clip retains original creation time
         logging.info(f'Trim to {length} seconds successful.\n')
     except:
         logging.error(f'(!) Error while trimming clip: {format_exc()}')
@@ -795,6 +797,7 @@ class AutoCutter:
                 undo.write(f'{basename(temp_path1)} -> {basename(temp_path2)} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
 
             os.rename(temp_path, clip_path1)
+            setctime(clip_path1, getstat(temp_path1).st_ctime)  # ensure edited clip retains original creation time
             self.pop(index)
             clip1.refresh()
             logging.info('Clips concatenated, renamed, popped, refreshed, and cleaned up successfully.')
