@@ -68,8 +68,8 @@ MAX_BACKUPS = 5
 
 # --- Paths ---
 LOG_PATH = None
-BACKUP_DIR = 'Backups'
-RESOURCE_DIR = 'resources'
+BACKUP_FOLDER = 'Backups'
+RESOURCE_FOLDER = 'resources'
 HISTORY_PATH = 'history.txt'
 UNDO_LIST_PATH = 'undo.txt'
 ICON_PATH = 'icon.ico'
@@ -215,7 +215,7 @@ GAME_ALIASES = {    # NOTE: the game titles must be lowercase and have no double
 
 
 # --- Registry setting overrides ---
-VIDEO_PATH_OVERRIDE = ''
+VIDEO_FOLDER_OVERRIDE = ''
 INSTANT_REPLAY_HOTKEY_OVERRIDE = ''
 TRAY_ALIGN_CENTER = False
 
@@ -241,18 +241,18 @@ CLIP_BUFFER = max(5, TRAY_RECENT_CLIP_COUNT)
 CWD = dirname(os.path.realpath(__file__))
 os.chdir(CWD)
 
-APPDATA_PATH = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
-RESOURCE_DIR = abspath(RESOURCE_DIR)
+APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
+RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
 
 if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
-else: ICON_PATH = pjoin(RESOURCE_DIR if exists(RESOURCE_DIR) else CWD, 'icon.ico')
+else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, 'icon.ico')
 if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
-else: HISTORY_PATH = pjoin(APPDATA_PATH if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
+else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
-else: UNDO_LIST_PATH = pjoin(APPDATA_PATH if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
+else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
 if not LOG_PATH: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
 if splitdrive(LOG_PATH)[0]: LOG_PATH = abspath(LOG_PATH)
-else: LOG_PATH = pjoin(APPDATA_PATH if SAVE_LOG_FILE_TO_APPDATA_FOLDER else CWD, LOG_PATH)
+else: LOG_PATH = pjoin(APPDATA_FOLDER if SAVE_LOG_FILE_TO_APPDATA_FOLDER else CWD, LOG_PATH)
 
 assert exists(ICON_PATH), f'No icon exists at {ICON_PATH}!'
 if not exists(dirname(HISTORY_PATH)): os.makedirs(dirname(HISTORY_PATH))
@@ -280,16 +280,16 @@ logging.basicConfig(
 # Registry Settings
 # ---------------------
 # get ShadowPlay video path from registry
-if not VIDEO_PATH_OVERRIDE:
+if not VIDEO_FOLDER_OVERRIDE:
     try:
         import winreg   # NOTE: ShadowPlay settings are encoded in utf-16 and have a NULL character at the end
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS')
-        VIDEO_PATH = winreg.QueryValueEx(key, 'DefaultPathW')[0].decode('utf-16')[:-1]
+        VIDEO_FOLDER = winreg.QueryValueEx(key, 'DefaultPathW')[0].decode('utf-16')[:-1]
     except:
-        logging.critical(f'Could not find video path from registry: {format_exc()}\n\nPlease set VIDEO_PATH_OVERRIDE.')
+        logging.critical(f'Could not find video path from registry: {format_exc()}\n\nPlease set VIDEO_FOLDER_OVERRIDE.')
         sys.exit(2)
-else: VIDEO_PATH = VIDEO_PATH_OVERRIDE.strip()
-logging.info('Video path: ' + VIDEO_PATH)
+else: VIDEO_FOLDER = VIDEO_FOLDER_OVERRIDE.strip()
+logging.info('Video directory: ' + VIDEO_FOLDER)
 
 # get Instant Replay hotkey from registry (each key is a separate value)
 if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
@@ -337,27 +337,27 @@ logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
 # ---------------------
 # Backup dir cleanup
 # ---------------------
-if exists(BACKUP_DIR): BACKUP_DIR = abspath(BACKUP_DIR)
-elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_DIR = pjoin(VIDEO_PATH, BACKUP_DIR)
-elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_DIR = pjoin(APPDATA_PATH, BACKUP_DIR)
-else: BACKUP_DIR = pjoin(CWD, BACKUP_DIR)
+if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
+elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_FOLDER = pjoin(VIDEO_FOLDER, BACKUP_FOLDER)
+elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKUP_FOLDER)
+else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
 
-# VIDEO_PATH and BACKUP_DIR must be on the same drive or we'll get OSError 17
-if (splitdrive(VIDEO_PATH)[0] != splitdrive(BACKUP_DIR)[0] or
-    os.path.ismount(VIDEO_PATH) != os.path.ismount(BACKUP_DIR)):
+# VIDEO_FOLDER and BACKUP_FOLDER must be on the same drive or we'll get OSError 17
+if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0] or
+    os.path.ismount(VIDEO_FOLDER) != os.path.ismount(BACKUP_FOLDER)):
     msg = ("Your video folder and the path for saving temporary "
            "backups are not on the same drive. Instant Replay Suite "
            "cannot backup and restore videos across drives without "
            "copying them back and forth.\n\nVideo folder: "
-           f"{VIDEO_PATH}\nBackup folder: {BACKUP_DIR}\n\nPlease "
-           "set `SAVE_BACKUPS_TO_VIDEO_FOLDER` or specify an "
-           "absolute path for `BACKUP_DIR` on the same drive.")
+           f"{VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}\n\n"
+           "Please set `SAVE_BACKUPS_TO_VIDEO_FOLDER` or specify "
+           "an absolute path for `BACKUP_FOLDER` on the same drive.")
     MessageBox = ctypes.windll.user32.MessageBoxW   # flags are !-symbol + stay on top
     MessageBox(None, msg, 'Invalid Backup Directory', 0x00040030)
     logging.error(msg)
     exit(17)
 
-if not exists(BACKUP_DIR): os.makedirs(BACKUP_DIR)
+if not exists(BACKUP_FOLDER): os.makedirs(BACKUP_FOLDER)
 
 
 # ---------------------
@@ -413,7 +413,7 @@ def delete(path: str):
 
 def play_alert(sound: str) -> bool:
     if AUDIO:
-        path = pjoin(RESOURCE_DIR, f'{sound}.wav')
+        path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
         logging.info('Playing alert: ' + path)
         try: winsound.PlaySound(path, winsound.SND_ASYNC)
         except:
@@ -429,9 +429,9 @@ def refresh_backups(*paths):
         even if `MAX_BACKUPS` is 0. Assumes all backups use the format
         "{time.time_ns()}*.mp4". '''
     old_backups = 0
-    for filename in reversed(os.listdir(BACKUP_DIR)):
+    for filename in reversed(os.listdir(BACKUP_FOLDER)):
         if filename[-4:] != '.txt' and filename[:19].isnumeric():
-            path = pjoin(BACKUP_DIR, filename)
+            path = pjoin(BACKUP_FOLDER, filename)
             if path not in paths:
                 old_backups += 1
                 if old_backups >= MAX_BACKUPS:
@@ -459,7 +459,7 @@ def trim_off_start_in_place(clip: Clip, length: float):
     if clip.length <= length: return logging.info(f'(?) Video is only {clip.length:.2f} seconds long and cannot be trimmed to {length} seconds.')
 
     ext = splitext(clip_path)[-1]
-    temp_path = pjoin(BACKUP_DIR, f'{time.time_ns()}{ext}')
+    temp_path = pjoin(BACKUP_FOLDER, f'{time.time_ns()}{ext}')
     os.renames(clip_path, temp_path)
 
     try:
@@ -637,7 +637,7 @@ class AutoCutter:
                    "(or you deleted your history file). Please review your hotkey "
                    "and renaming settings and restart if necessary.\n\nWould you "
                    "like to organize, rename, and add all existing clips in "
-                   f"{VIDEO_PATH}? Click cancel to exit Instant Replay Suite.")
+                   f"{VIDEO_FOLDER}? Click cancel to exit Instant Replay Suite.")
             MessageBox = ctypes.windll.user32.MessageBoxW   # flags are ?-symbol, stay on top, Yes/No/Cancel
             response = MessageBox(None, msg, 'Welcome to Instant Replay Suite', 0x00040023)
             if response == 2:               # Cancel/X
@@ -745,11 +745,11 @@ class AutoCutter:
                 logging.info('Instant replay detected! Waiting 3 seconds...')
                 self.last_clip_time = time.time() - 1
                 time.sleep(3)
-            logging.info(f'Scanning {VIDEO_PATH} for videos')
+            logging.info(f'Scanning {VIDEO_FOLDER} for videos')
             last_clip_time = self.last_clip_time    # alias for optimization
-            for root, _, files in os.walk(VIDEO_PATH):
+            for root, _, files in os.walk(VIDEO_FOLDER):
                 if basename(root).lower() in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
-                if root == BACKUP_DIR: continue
+                if root == BACKUP_FOLDER: continue
                 for file in files:
                     path = pjoin(root, file)
                     stat = getstat(path)            # ↓ skip non-mp4 files ↓
@@ -817,10 +817,10 @@ class AutoCutter:
 
             delete(text_path)
             ext = splitext(clip_path1)[-1]
-            temp_path1 = pjoin(BACKUP_DIR, f'{time.time_ns()}_1{ext}')
+            temp_path1 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_1{ext}')
             os.renames(clip_path1, temp_path1)
             ext = splitext(clip_path2)[-1]
-            temp_path2 = pjoin(BACKUP_DIR, f'{time.time_ns()}_2{ext}')
+            temp_path2 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_2{ext}')
             os.renames(clip_path2, temp_path2)
 
             with open(UNDO_LIST_PATH, 'w') as undo:
@@ -915,7 +915,7 @@ class AutoCutter:
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
                     os.remove(new)
-                    os.rename(pjoin(BACKUP_DIR, old), new)
+                    os.rename(pjoin(BACKUP_FOLDER, old), new)
                     logging.info(f'Undo completed for "{action}" on clip "{new}"')
                     clip = self.get_clip(path=new)
                     if isinstance(clip, Clip): clip.refresh()       # refresh clip
@@ -927,8 +927,8 @@ class AutoCutter:
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
                     os.remove(new)
-                    os.rename(pjoin(BACKUP_DIR, old), new)
-                    os.rename(pjoin(BACKUP_DIR, old2), new2)
+                    os.rename(pjoin(BACKUP_FOLDER, old), new)
+                    os.rename(pjoin(BACKUP_FOLDER, old2), new2)
 
                     index = self.last_clips.index(new)              # concat removes new2 from the list...
                     buffer = len(self.last_clips) - CLIP_BUFFER     # ...so new2 needs to be re-added
@@ -1038,7 +1038,7 @@ if __name__ == '__main__':
         # action dictionary
         TRAY_ACTIONS = {
             'open_log':             lambda: os.startfile(LOG_PATH),
-            'open_video_folder':    lambda: os.startfile(VIDEO_PATH),
+            'open_video_folder':    lambda: os.startfile(VIDEO_FOLDER),
             'open_install_folder':  lambda: os.startfile(CWD),
             'play_most_recent':     lambda: cutter.open_clip(play=True),
             'explore_most_recent':  lambda: cutter.open_clip(play=False),
@@ -1127,7 +1127,7 @@ if __name__ == '__main__':
             tray_menu = (
                 LEFT_CLICK_ACTION,
                 pystray.MenuItem('View log',    action=lambda: os.startfile(LOG_PATH)),
-                pystray.MenuItem('View videos', action=lambda: os.startfile(VIDEO_PATH)),
+                pystray.MenuItem('View videos', action=lambda: os.startfile(VIDEO_FOLDER)),
                 SEPARATOR,
                 *RECENT_CLIPS_MENU,
                 SEPARATOR,
