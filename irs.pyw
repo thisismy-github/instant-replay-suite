@@ -568,7 +568,7 @@ class Icon(pystray._win32.Icon):
 # Clip class
 # ---------------------
 class Clip:
-    __slots__ = ('working', 'path', 'name', 'time', 'size', 'date', 'full_date', 'length', 'length_string', 'length_size_string')
+    __slots__ = ('working', 'path', 'name', 'time', 'raw_size', 'size', 'date', 'full_date', 'length', 'length_string', 'length_size_string')
     def __repr__(self): return self.name
 
     def __init__(self, path, stat, rename=False):
@@ -579,6 +579,7 @@ class Clip:
 
         self.path = path
         self.time = stat.st_ctime
+        self.raw_size = stat.st_size
         self.size = size
         self.date = datetime.strftime(datetime.fromtimestamp(stat.st_ctime), TRAY_RECENT_CLIP_DATE_FORMAT)
         self.full_date = datetime.strftime(datetime.fromtimestamp(stat.st_ctime), TRAY_EXTRA_INFO_DATE_FORMAT)
@@ -591,12 +592,14 @@ class Clip:
         self.length_size_string = f'Length: {length_string} ({size})'
 
 
-    def refresh(self, path=None, stat=None, size=None):
-        ''' Refreshes various statistics for the clip, including creation-time, size, and length. '''
+    def refresh(self, path=None, stat=None):
+        ''' Refreshes various statistics for the clip,
+            including creation time, size, and length. '''
         path = path or self.path
         stat = stat or getstat(path)
-        size = size or f'{(stat.st_size / 1048576):.1f}mb'
+        size = f'{(stat.st_size / 1048576):.1f}mb'
         self.time = stat.st_ctime
+        self.raw_size = stat.st_size
         self.size = size
 
         length = get_video_duration(path)
@@ -987,10 +990,15 @@ if __name__ == '__main__':
         # Tray-icon functions
         # ---------------------
         def get_clip_tray_title(index: int, format: str = TRAY_RECENT_CLIP_NAME_FORMAT, default: str = TRAY_RECENT_CLIP_DEFAULT_TEXT) -> str:
-            ''' Returns the basename of a recent clip by its index. If no clip exists at that index, the default parameter is returned. '''
+            ''' Returns the title of a recent clip item by its `index`.
+                If no clip exists at that index, `default` is returned. '''
             try:
                 clip = cutter.last_clips[index]
-                if not exists(clip.path):
+                path = clip.path
+                try:        # assume all paths exist and react accordingly
+                    stat = getstat(path)
+                    if stat.st_size != clip.raw_size: clip.refresh(path, stat)
+                except FileNotFoundError:
                     cutter.pop(index)
                     return get_clip_tray_title(index)
 
@@ -1018,8 +1026,8 @@ if __name__ == '__main__':
                         .replace('?recency', time_delta_string)
                         .replace('?size', clip.size)
                         .replace('?length', clip.length_string)
-                        .replace('?clippath', clip.path)
-                        .replace('?clipdir', os.sep.join(clip.path.split(os.sep)[-2:]) if '?clipdir' in format else '')
+                        .replace('?clippath', path)
+                        .replace('?clipdir', os.sep.join(path.split(os.sep)[-2:]) if '?clipdir' in format else '')
                         .replace('?clip', clip.name))
             except IndexError: return default
             except: logging.error(f'(!) Error while generating title for system tray clip {clip} at index {index}: {cutter.last_clips} {format_exc()}')
