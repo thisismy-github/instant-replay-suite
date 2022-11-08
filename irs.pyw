@@ -411,6 +411,44 @@ def delete(path: str):
         play_alert('error')
 
 
+def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FORMAT):
+    ''' Renames clip at `path` according to `name_format` and `date_format`
+        assuming the clip already uses ShadowPlay's default formatting. '''
+    try:
+        parts = basename(path).split()
+        parts[-1] = '.'.join(parts[-1].split('.')[:-3])
+
+        date_string = ' '.join(parts[-3:])
+        date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
+        game = ' '.join(parts[:-3])
+        if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
+
+        renamed_base_no_ext = name_format.replace('?game', game).replace('?date', date.strftime(date_format))
+        renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
+        renamed_path = f'{renamed_path_no_ext}.mp4'
+
+        count_detected = '?count' in renamed_path_no_ext
+        if count_detected or exists(renamed_path):
+            count = RENAME_COUNT_START_NUMBER
+            if not count_detected:      # if forced to add a number, use windows-style count: start from (2)
+                count = 2
+                renamed_path_no_ext = f'{renamed_path_no_ext} (?count)'
+            while True:
+                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
+                renamed_path = f'{renamed_path_no_ext.replace("?count", count_string)}.mp4'
+                if not exists(renamed_path): break
+                count += 1
+
+        renamed_base = basename(renamed_path)
+        logging.info(f'Renaming video to: {renamed_base}')
+        os.rename(path, renamed_path)
+        logging.info('Rename successful.')
+        return abspath(renamed_path), renamed_base      # use abspath to ensure consistent path formatting later on
+    except Exception as error:
+        logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
+        return path, basename(path)
+
+
 def play_alert(sound: str) -> bool:
     if AUDIO:
         path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
@@ -533,63 +571,38 @@ class Clip:
 
     def __init__(self, path, stat, rename=False):
         self.working = False
-        self.path, self.name = self.rename(path) if rename else (abspath(path), basename(path))   # abspath for consistent formatting
+
+        path, self.name = auto_rename_clip(path) if rename else (abspath(path), basename(path))   # abspath for consistent formatting
+        size = f'{(stat.st_size / 1048576):.1f}mb'
+
+        self.path = path
         self.time = stat.st_ctime
-        self.size = f'{(stat.st_size / 1048576):.1f}mb'
+        self.size = size
         self.date = datetime.strftime(datetime.fromtimestamp(stat.st_ctime), TRAY_RECENT_CLIP_DATE_FORMAT)
         self.full_date = datetime.strftime(datetime.fromtimestamp(stat.st_ctime), TRAY_EXTRA_INFO_DATE_FORMAT)
-        self.length = get_video_duration(self.path)     # NOTE: this could be faster, but uglier
-        length_int = int(self.length)
-        self.length_string = f'{length_int // 60}:{length_int % 60:02}'
-        self.length_size_string = f'Length: {self.length_string} ({self.size})'
+
+        length = get_video_duration(path)   # NOTE: this could be faster, but uglier
+        length_int = int(length)
+        length_string = f'{length_int // 60}:{length_int % 60:02}'
+        self.length = length
+        self.length_string = length_string
+        self.length_size_string = f'Length: {length_string} ({size})'
 
 
-    def refresh(self):
+    def refresh(self, path=None, stat=None, size=None):
         ''' Refreshes various statistics for the clip, including creation-time, size, and length. '''
-        stat = getstat(self.path)
+        path = path or self.path
+        stat = stat or getstat(path)
+        size = size or f'{(stat.st_size / 1048576):.1f}mb'
         self.time = stat.st_ctime
-        self.size = f'{(stat.st_size / 1048576):.1f}mb'
-        self.length = get_video_duration(self.path)
-        length_int = int(self.length)
-        self.length_string = f'{length_int // 60}:{length_int % 60:02}'
-        self.length_size_string = f'Length: {self.length_string} ({self.size})'
+        self.size = size
 
-
-    def rename(self, path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FORMAT):
-        ''' Renames the clip according to specified `name_format` and
-            `date_format` based on ShadowPlay's default name formatting. '''
-        try:
-            parts = basename(path).split()
-            parts[-1] = '.'.join(parts[-1].split('.')[:-3])
-
-            date_string = ' '.join(parts[-3:])
-            date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
-            game = ' '.join(parts[:-3])
-            if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
-
-            renamed_base_no_ext = name_format.replace('?game', game).replace('?date', date.strftime(date_format))
-            renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
-            renamed_path = f'{renamed_path_no_ext}.mp4'
-
-            count_detected = '?count' in renamed_path_no_ext
-            if count_detected or exists(renamed_path):
-                count = RENAME_COUNT_START_NUMBER
-                if not count_detected:      # if forced to add a number, use windows-style count: start from (2)
-                    count = 2
-                    renamed_path_no_ext = f'{renamed_path_no_ext} (?count)'
-                while True:
-                    count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
-                    renamed_path = f'{renamed_path_no_ext.replace("?count", count_string)}.mp4'
-                    if not exists(renamed_path): break
-                    count += 1
-            renamed_base = basename(renamed_path)
-            logging.info(f'Renaming video to: {renamed_base}')
-            os.rename(path, renamed_path)
-            logging.info('Rename successful.')
-            return abspath(renamed_path), renamed_base      # use abspath to ensure consistent path formatting later on
-        except Exception as error:
-            logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
-            return path, basename(path)
+        length = get_video_duration(path)
+        length_int = int(length)
+        length_string = f'{length_int // 60}:{length_int % 60:02}'
+        self.length = length
+        self.length_string = length_string
+        self.length_size_string = f'Length: {length_string} ({size})'
 
 
     def is_working(self, verb):
