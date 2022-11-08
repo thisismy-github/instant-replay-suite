@@ -403,8 +403,8 @@ def quit_tray(icon):
 
 
 def delete(path: str):
-    ''' Deletes a clip at the given `path`. '''
-    logging.info('Deleting clip: ' + path)
+    ''' Robustly deletes a given `path`. '''
+    logging.info('Deleting: ' + path)
     try:
         if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
         else: os.remove(path)
@@ -829,14 +829,26 @@ class AutoCutter:
             logging.info(cmd)
             process = subprocess.Popen(cmd, shell=True)
             process.wait()
-
             delete(text_path)
+
+            # attempt to move first clip to backup folder
             ext = splitext(clip_path1)[-1]
             temp_path1 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_1{ext}')
-            os.renames(clip_path1, temp_path1)
+            try: os.renames(clip_path1, temp_path1)
+            except:
+                delete(temp_path)                               # delete concat clip to avoid confusing user
+                logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
+                return play_alert('error')
+
+            # attempt to move second clip to backup folder
             ext = splitext(clip_path2)[-1]
             temp_path2 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_2{ext}')
-            os.renames(clip_path2, temp_path2)
+            try: os.renames(clip_path2, temp_path2)
+            except:
+                delete(temp_path)                               # delete concat clip to avoid confusing user
+                os.rename(temp_path1, clip_path1)               # restore first clip if second clip failed
+                logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
+                return play_alert('error')
 
             with open(UNDO_LIST_PATH, 'w') as undo:
                 undo.write(f'{basename(temp_path1)} -> {basename(temp_path2)} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
