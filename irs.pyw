@@ -120,6 +120,7 @@ Normal tray items:
     'open_log':             Opens this program's log file.
     'open_video_folder':    Opens the currently defined "Videos" folder.
     'open_install_folder':  Opens this program's root folder.
+    'open_backup_folder':   Opens the currently defined backup folder.
     'play_most_recent':     Plays your most recent clip.
     'explore_most_recent':  Opens your most recent clip in Explorer.
     'delete_most_recent':   Deletes your most recent clip.
@@ -161,6 +162,7 @@ TRAY_ADVANCED_MODE_MENU = (
     {'View log': 'open_log'},
     {'View videos': 'open_video_folder'},
     {'View root': 'open_install_folder'},
+    {'View backups': 'open_backup_folder'},
     'separator',
     {'Play last clip': 'play_most_recent'},
     {'Explore last clip': 'explore_most_recent'},
@@ -1053,6 +1055,7 @@ if __name__ == '__main__':
             'open_log':             lambda: os.startfile(LOG_PATH),
             'open_video_folder':    lambda: os.startfile(VIDEO_FOLDER),
             'open_install_folder':  lambda: os.startfile(CWD),
+            'open_backup_folder':   lambda: os.startfile(BACKUP_FOLDER),
             'play_most_recent':     lambda: cutter.open_clip(play=True),
             'explore_most_recent':  lambda: cutter.open_clip(play=False),
             'delete_most_recent':   lambda: cutter.delete_clip(),               # small RAM drop by making these not lambdas
