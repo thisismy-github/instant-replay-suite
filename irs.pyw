@@ -451,17 +451,19 @@ def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FO
         return path, basename(path)
 
 
-def play_alert(sound: str) -> bool:
-    if AUDIO:
-        path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
-        logging.info('Playing alert: ' + path)
+def play_alert(sound: str):
+    if not AUDIO: return
+    path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
+    logging.info('Playing alert: ' + path)
+    if exists(path):
         try: winsound.PlaySound(path, winsound.SND_ASYNC)
         except:
             winsound.MessageBeep(winsound.MB_ICONHAND)      # play OS error sound
-            if sound != 'error':    # intentional error sound (and there's no custom error.wav) -> ignore missing file error
-                logging.error(f'(!) Error while playing sound {path}: {format_exc()}')
-                return False
-    return True
+            logging.error(f'(!) Error while playing alert {path}: {format_exc()}')
+    else:       # generic OS alert for missing file, OS error for actual errors
+        if sound == 'error': winsound.MessageBeep(winsound.MB_ICONHAND)
+        else: winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        logging.warning('(!) Alert doesn\'t exist at path ' + path)
 
 
 def refresh_backups(*paths):
