@@ -765,24 +765,29 @@ class AutoCutter:
                 time.sleep(3)
             logging.info(f'Scanning {VIDEO_FOLDER} for videos')
             last_clip_time = self.last_clip_time    # alias for optimization
-            for root, _, files in os.walk(VIDEO_FOLDER):
-                if basename(root).lower() in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
-                if root == BACKUP_FOLDER: continue
-                for file in files:
-                    path = pjoin(root, file)
-                    stat = getstat(path)            # ↓ skip non-mp4 files ↓
-                    if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
-                        logging.info(f'New video detected: {file}')
-                        while get_video_duration(path) == 0:
-                            logging.debug(f'VIDEO DURATION IS 0 ({path})')
-                            time.sleep(0.2)
 
-                        clip = Clip(path, stat, rename=RENAME)
-                        self.last_clips.append(clip)
-                        self.last_clip_time = stat.st_ctime
-                        logging.info(f'Memory usage after adding clip: {get_memory():.2f}mb\n')
-                        if manual_update: continue
-                        else: return
+            # ONLY look at the base files of the base subfolders
+            for filename in os.listdir(VIDEO_FOLDER):
+                if filename in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
+                folder = pjoin(VIDEO_FOLDER, filename)
+                if folder == BACKUP_FOLDER: continue
+
+                if os.path.isdir(folder):
+                    for file in os.listdir(folder):
+                        path = pjoin(folder, file)
+                        stat = getstat(path)        # skip non-mp4 files ↓
+                        if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
+                            logging.info(f'New video detected: {file}')
+                            while get_video_duration(path) == 0:
+                                logging.debug(f'VIDEO DURATION IS 0 ({path})')
+                                time.sleep(0.2)
+
+                            clip = Clip(path, stat, rename=RENAME)
+                            self.last_clips.append(clip)
+                            self.last_clip_time = stat.st_ctime
+                            logging.info(f'Memory usage after adding clip: {get_memory():.2f}mb\n')
+                            if manual_update: continue
+                            else: return            # for auto-checks, stop after first file found
         except:
             logging.error(f'(!) Error while checking for new clips: {format_exc()}')
             play_alert('error')
