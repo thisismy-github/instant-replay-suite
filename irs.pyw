@@ -692,7 +692,7 @@ class Clip:
 # Main class
 # ---------------------
 class AutoCutter:
-    __slots__ = ('waiting_for_clip', 'last_clip_time', 'last_clips')
+    __slots__ = ('waiting_for_clip', 'last_clips')
 
     def __init__(self):
         start = time.time()
@@ -703,11 +703,13 @@ class AutoCutter:
                 lines = []
                 addpath = lines.append
                 for path in reversed(history.read().splitlines()):      # reversed() is an iterable, not an actual list (no performance loss)
-                    if path and exists(path) and path not in lines:
+                    if path and exists(path) and path not in lines:     # faster than using a set
                         addpath(path)
 
                 logging.info(f'History file parsed in {time.time() - start:.3f} seconds.')
 
+                # sort history by creation date to resolve most issues before they arise
+                lines.sort(key=lambda clip: getstat(clip).st_ctime, reverse=True)
                 last_clips = [Clip(path, getstat(path)) if index <= CLIP_BUFFER else path for index, path in enumerate(lines)]
                 last_clips.reverse()                        # .reverse() is a very fast operation
                 if last_clips: logging.info(f'Previous {len(last_clips)} clip{"s" if len(last_clips) != 1 else ""} loaded: {last_clips}')
@@ -715,9 +717,7 @@ class AutoCutter:
                 logging.info(f'Previous clips loaded in {time.time() - start:.2f} seconds.')
 
                 self.last_clips = last_clips
-                if CHECK_FOR_NEW_CLIPS_ON_LAUNCH:
-                    self.last_clip_time = getstat(last_clips[-1].path).st_ctime
-                    self.check_for_clips(manual_update=True)
+                if CHECK_FOR_NEW_CLIPS_ON_LAUNCH: self.check_for_clips(manual_update=True)
                 del lines
         else:
             self.last_clips = []
@@ -728,16 +728,14 @@ class AutoCutter:
                    f"{VIDEO_FOLDER}? Click cancel to exit Instant Replay Suite.")
             MessageBox = ctypes.windll.user32.MessageBoxW   # flags are ?-symbol, stay on top, Yes/No/Cancel
             response = MessageBox(None, msg, 'Welcome to Instant Replay Suite', 0x00040023)
-            if response == 2:               # Cancel/X
+            if response == 2:       # Cancel/X
                 logging.info('Cancel selected on welcome dialog, closing...')
                 exit(2)
-            elif response == 7:             # No
+            elif response == 7:     # No
                 logging.info('No selected on welcome dialog, not retroactively adding clips.')
-                self.last_clip_time = time.time()
-            elif response == 6:             # Yes
+            elif response == 6:     # Yes
                 logging.info('Yes selected on welcome dialog, looking for pre-existing clips...')
-                self.last_clip_time = 0     # set last_clip_time to 0 so all .mp4 files are valid
-                self.check_for_clips(manual_update=True)
+                self.check_for_clips(manual_update=True, from_time=0)
 
         # define instant replay hotkey BEFORE we do the dumb garbage below it
         keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.check_for_clips)
@@ -833,19 +831,21 @@ class AutoCutter:
     # ---------------------
     # Acquiring clips
     # ---------------------
-    def check_for_clips(self, manual_update=False):
+    def check_for_clips(self, manual_update=False, from_time=None):
         self.waiting_for_clip = True
-        Thread(target=self.check_for_clips_thread, args=(manual_update,), daemon=True).start()
+        Thread(target=self.check_for_clips_thread, args=(manual_update, from_time), daemon=True).start()
 
 
-    def check_for_clips_thread(self, manual_update=False):
+    def check_for_clips_thread(self, manual_update=False, from_time=None):
         try:
+            last_clips = self.last_clips
             if not manual_update:
                 logging.info('Instant replay detected! Waiting 3 seconds...')
-                self.last_clip_time = time.time() - 1
+                last_clip_time = time.time() - 1
                 time.sleep(3)
+            elif from_time is not None: last_clip_time = from_time
+            else: last_clip_time = last_clips[-1].time
             logging.info(f'Scanning {VIDEO_FOLDER} for videos')
-            last_clip_time = self.last_clip_time    # alias for optimization
 
             # ONLY look at the base files of the base subfolders
             for filename in os.listdir(VIDEO_FOLDER):
@@ -856,25 +856,24 @@ class AutoCutter:
                 if os.path.isdir(folder):
                     for file in os.listdir(folder):
                         path = pjoin(folder, file)
-                        stat = getstat(path)        # skip non-mp4 files ↓
+                        stat = getstat(path)            # skip non-mp4 files ↓
                         if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
                             logging.info(f'New video detected: {file}')
                             while get_video_duration(path) == 0:
-                                logging.debug(f'VIDEO DURATION IS 0 ({path})')
-                                time.sleep(0.2)
+                                logging.info('Video duration is still 0, retrying...')
+                                time.sleep(0.2)         # if duration is 0, the video is still being saved
 
                             clip = Clip(path, stat, rename=RENAME)
-                            self.last_clips.append(clip)
-                            self.last_clip_time = stat.st_ctime
+                            last_clips.append(clip)
                             logging.info(f'Memory usage after adding clip: {get_memory():.2f}mb\n')
-                            if manual_update: continue
-                            else: return            # for auto-checks, stop after first file found
+                            if manual_update: continue  # don't stop after first video on manual scans
+                            else: return                # for auto-checks, stop after first file found
         except:
             logging.error(f'(!) Error while checking for new clips: {format_exc()}')
             play_alert('error')
         finally:
             if manual_update:
-                self.last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
+                last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
                 logging.info('Manual scan complete.')
             self.waiting_for_clip = False
             gc.collect(generation=2)
