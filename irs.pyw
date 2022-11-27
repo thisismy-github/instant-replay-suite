@@ -232,7 +232,6 @@ splitext = os.path.splitext
 splitpath = os.path.split
 makedirs = os.makedirs
 rename = os.rename
-renames = os.renames
 remove = os.remove
 
 
@@ -411,6 +410,13 @@ def delete(path: str):
     except:
         logging.error(f'(!) Error while deleting file {path}: {format_exc()}')
         play_alert('error')
+
+
+def renames(old: str, new: str):
+    ''' `os.py`'s super-rename, but without deleting empty directories. '''
+    head, tail = splitpath(new)
+    if head and tail and not exists(head): makedirs(head)
+    rename(old, new)
 
 
 def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FORMAT):
