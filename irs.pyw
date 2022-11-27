@@ -263,6 +263,11 @@ if not exists(dirname(LOG_PATH)): makedirs(dirname(LOG_PATH))
 if isinstance(IGNORE_VIDEOS_IN_THESE_FOLDERS, str): IGNORE_VIDEOS_IN_THESE_FOLDERS = (IGNORE_VIDEOS_IN_THESE_FOLDERS,)
 IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(path.strip().lower() for path in IGNORE_VIDEOS_IN_THESE_FOLDERS)
 
+# every clip in the menu + the first one outside the menu should be a Clip object
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY = '?recency' in TRAY_RECENT_CLIP_NAME_FORMAT
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT = '?recencyshort' in TRAY_RECENT_CLIP_NAME_FORMAT
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
+
 
 # ---------------------
 # Logging
@@ -1100,7 +1105,7 @@ if __name__ == '__main__':
         # ---------------------
         # Tray-icon functions
         # ---------------------
-        def get_clip_tray_title(index: int, format: str = TRAY_RECENT_CLIP_NAME_FORMAT, default: str = TRAY_RECENT_CLIP_DEFAULT_TEXT) -> str:
+        def get_clip_tray_title(index: int, default: str = TRAY_RECENT_CLIP_DEFAULT_TEXT) -> str:
             ''' Returns the title of a recent clip item by its `index`.
                 If no clip exists at that index, `default` is returned. '''
             try:
@@ -1114,12 +1119,12 @@ if __name__ == '__main__':
                     return get_clip_tray_title(index)
 
                 # get loose estimate of how long ago it was, if necessary
-                if '?recency' in format:
+                if TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY:            # ?recency
                     time_delta = time.time() - clip.time
                     d = int(time_delta // 86400)
                     h = int(time_delta // 3600)
                     m = int(time_delta // 60)
-                    if '?recencyshort' in format:
+                    if TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT:   # ?recencyshort
                         if d:   time_delta_string = f'{d}d'
                         elif h: time_delta_string = f'{h}h'
                         elif m: time_delta_string = f'{m}m'
@@ -1131,14 +1136,14 @@ if __name__ == '__main__':
                         else: time_delta_string = 'just now'
                 else: time_delta_string = ''
 
-                return (format
+                return (TRAY_RECENT_CLIP_NAME_FORMAT
                         .replace('?date', clip.date)
-                        .replace('?recencyshort', time_delta_string)
+                        .replace('?recencyshort', time_delta_string)    # ?recencyshort first so ?recency is replaced
                         .replace('?recency', time_delta_string)
                         .replace('?size', clip.size)
                         .replace('?length', clip.length_string)
                         .replace('?clippath', path)
-                        .replace('?clipdir', sepjoin(path.split(sep)[-2:]) if '?clipdir' in format else '')
+                        .replace('?clipdir', sepjoin(path.split(sep)[-2:]) if TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR else '')
                         .replace('?clip', clip.name))
             except IndexError: return default
             except: logging.error(f'(!) Error while generating title for system tray clip {clip} at index {index}: {cutter.last_clips} {format_exc()}')
