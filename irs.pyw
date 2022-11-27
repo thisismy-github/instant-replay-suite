@@ -767,14 +767,19 @@ class AutoCutter:
         popped = None
         try:
             popped = last_clips.pop(index)
-            cached_clip_index = -(CLIP_BUFFER + 1)      # +1 to check first clip outside buffer
-            while isinstance(cached_clip := last_clips[cached_clip_index], str):    # convert clip to actual Clip object if it's just a string
-                if exists(cached_clip):                 # if cached clip exists, convert to Clip object and break loop
-                    last_clips[cached_clip_index] = Clip(cached_clip, getstat(cached_clip), rename=False)
+
+            # convert string at end of clip buffer to a Clip object
+            # this could be uncache_clip(), but we only use this here
+            cache_index = -(CLIP_BUFFER + 1)    # +1 to check very last clip in buffer
+            while isinstance(clip := last_clips[cache_index], str):
+                if exists(clip):                # if cached string exists, convert to Clip object and break loop
+                    logging.info(f'Uncaching {clip} at index {cache_index}.')
+                    last_clips[cache_index] = Clip(clip, getstat(clip), rename=False)
                     break
-                last_clips.pop(cached_clip_index)       # if cached clip doesn't exist, pop and try next clip
-        except IndexError: pass                         # IndexError -> pop was out of range, pass and return None
-        except: logging.error(f'(!) Error while popping clip at index {index} <cached_clip_index={cached_clip_index}, len(self.last_clips)={len(self.last_clips)}>: {format_exc()}')
+                last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
+
+        except IndexError: pass                 # IndexError -> pop was out of range, pass and return None
+        except: logging.error(f'(!) Error while popping clip at index {index} <cache_index={cache_index}, len(last_clips)={len(last_clips)}>: {format_exc()}')
         return popped
 
 
@@ -867,13 +872,34 @@ class AutoCutter:
                             last_clips.append(clip)
                             logging.info(f'Memory usage after adding clip: {get_memory():.2f}mb\n')
                             if manual_update: continue  # don't stop after first video on manual scans
-                            else: return                # for auto-checks, stop after first file found
+                            else:
+                                try:
+
+                                    # convert Clip object outside clip buffer to a string
+                                    # this could be cache_clip(), but we only use this here
+                                    cache_index = -(CLIP_BUFFER + 2)    # +2 to check first clip outside buffer
+                                    while isinstance(clip := last_clips[cache_index], Clip):
+                                        if exists(clip.path):           # if cached Clip object exists, convert to string and break loop
+                                            logging.info(f'Caching {clip} at index {cache_index}.')
+                                            last_clips[cache_index] = clip.path
+                                            break
+                                        last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
+
+                                except IndexError: pass                 # IndexError -> pop was out of range, pass
+                                except: logging.error(f'(!) Error while caching clip at index {cache_index} <len(last_clips)={len(last_clips)}>: {format_exc()}')
+                                return
+
         except:
             logging.error(f'(!) Error while checking for new clips: {format_exc()}')
             play_alert('error')
         finally:
-            if manual_update:
+            if manual_update:   # sort last_clips and then verify the cache
                 last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
+                for index, clip in enumerate(reversed(last_clips)):
+                    if isinstance(clip, Clip) and index > CLIP_BUFFER:
+                        last_clips[-index - 1] = clip.path
+                    elif isinstance(clip, str) and index <= CLIP_BUFFER:
+                        last_clips[-index - 1] = Clip(path, stat, rename=RENAME)
                 logging.info('Manual scan complete.')
             self.waiting_for_clip = False
             gc.collect(generation=2)
