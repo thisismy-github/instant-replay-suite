@@ -43,12 +43,6 @@ TODO pystray subclass improvements
             - left-clicks still get registered
             - pystray's _mainloop is blocking
             - an entire thread dedicated to handling double-clicks would likely be needed (unreasonable)
-FIXME: `INSTANT_REPLAY_HOTKEY` suddenly stops working with no error (has only happened once)
-FIXME: Alt + Arrow Keys emits number shortcuts (is it just my keyboard?)
-        - Alt + Up    = Alt + 8
-        - Alt + Down  = Alt + 2
-        - Alt + Left  = Alt + 4
-        - Alt + Right = Alt + 6
 '''
 
 # ---------------------
@@ -566,6 +560,68 @@ class Icon(pystray._win32.Icon):
                 descriptors[index - 1](self)
 
 
+# -------------------------
+# Custom keyboard listener
+# -------------------------
+INSTANT_REPLAY_HOTKEY_SCANCODES = tuple(sorted(keyboard.key_to_scan_codes(key.strip()) for key in INSTANT_REPLAY_HOTKEY.split('+')))
+ALL_INSTANT_REPLAY_HOTKEY_SCANCODES = tuple(code for code_tuple in INSTANT_REPLAY_HOTKEY_SCANCODES for code in code_tuple)
+ACTUAL_INSTANT_REPLAY_HOTKEY = tuple(sorted(code_tuple[0] for code_tuple in INSTANT_REPLAY_HOTKEY_SCANCODES))
+KEYPAD_DUPLICATES = (71, 72, 73, 75, 77, 79, 80, 81, 82, 83)   # 7, 8, 9, 4, 6, 1, 2, 3, 0, 'decimal'
+def pre_process_event(self, event):
+    ''' This is an *extremely* convulted way of dealing with
+        two major shortcomings with the keyboard library:
+            A. Using hotkeys while other keys are held down (like ShadowPlay)
+            B. Preventing erronous hotkey triggers when pressing
+               buttons that share scancodes with the number pad
+               (see AutoCutter.__init__.key_to_scan_codes_no_keypad for more)
+
+        Without this fix, you can accidentally save clips without the script
+        detecting it and common shortcuts will trigger Alt + Number hotkeys.
+
+        These shortcomings actually appear to be intentional design choices in
+        the keyboard library, as they allow the code to be MUCH faster and far
+        more elegant. Elegance which I have bludgeoned with a sledgehammer.
+
+        This took several hours to figure out. It is horrible. Ironically,
+        however, this is probably still better than other keyboard hooking
+        libraries. This could be much better and much more generalized, but
+        I will not be the one to figure it out. I can't believe I even made
+        it this far in the first place. Still worth it, though. '''
+
+    scan_code = event.scan_code
+    for key_hook in self.nonblocking_keys[scan_code]:
+        key_hook(event)
+
+    # A. Allow INSTANT_REPLAY_HOTKEY to be detected even while other keys are held down (like ShadowPlay does)
+    if scan_code in ALL_INSTANT_REPLAY_HOTKEY_SCANCODES:        # ALL_INSTANT_REPLAY_HOTKEY_SCANCODES is flattened
+        with keyboard._pressed_events_lock:                     # NOTE: ONLY this hotkey works like this because this...
+            hotkey = tuple(sorted(keyboard._pressed_events))    # ...implementation is too slow to do every hotkey this way
+        for valid_keys in INSTANT_REPLAY_HOTKEY_SCANCODES:      # each "key" is a tuple of possible scan codes that key uses
+            if not any(key in hotkey for key in valid_keys):    # see if at least one scan code in each tuple is being pressed
+                break
+        else: hotkey = ACTUAL_INSTANT_REPLAY_HOTKEY             # nobreak -> set hotkey to something `keyboard` will recognize
+
+    # B. Preventing erronous hotkey triggers when pressing buttons that share scancodes with the number pad (Alt + Arrows, etc.)
+    #    I have spent many days trying to figure out a simple, general purpose solution better than this one. I don't think
+    #    one exists with the limited information we have. Improving this will require a much more complicated system.
+    elif event.is_keypad and scan_code in KEYPAD_DUPLICATES and event.event_type == 'down':
+        with keyboard._pressed_events_lock:
+            del keyboard._pressed_events[scan_code]
+            hotkey = tuple(sorted(keyboard._pressed_events))
+
+    # The default keyboard library code, as seen in keyboard\__init__.py
+    else:
+        with keyboard._pressed_events_lock:
+            hotkey = tuple(sorted(keyboard._pressed_events))    # "hotkey" is a tuple of scan codes being pressed right now
+    for callback in self.nonblocking_hotkeys[hotkey]:
+        callback(event)
+    return scan_code or (event.name and event.name != 'unknown')
+
+
+# replace the keyboard libraries event processor with our own
+keyboard._KeyboardListener.pre_process_event = pre_process_event
+
+
 # ---------------------
 # Clip class
 # ---------------------
@@ -671,7 +727,18 @@ class AutoCutter:
                 self.last_clip_time = 0     # set last_clip_time to 0 so all .mp4 files are valid
                 self.check_for_clips(manual_update=True)
 
+        # define instant replay hotkey BEFORE we do the dumb garbage below it
         keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.check_for_clips)
+
+        # This edits `keyboard.key_to_scan_codes` so that it removes any scan codes from
+        # `KEYPAD_DUPLICATES`, unless it's the primary (smallest) scan code for that key.
+        # This is simpler than what I was doing before - editing `keyboard.add_hotkey`.
+        _key_to_scan_codes = keyboard.key_to_scan_codes
+        def key_to_scan_codes_no_keypad(*args, **kwargs):
+            codes = _key_to_scan_codes(*args, **kwargs)
+            return (codes[0], *(code for code in codes[1:] if code not in KEYPAD_DUPLICATES))
+        keyboard.key_to_scan_codes = key_to_scan_codes_no_keypad
+
         keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
         keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
         keyboard.add_hotkey(UNDO_HOTKEY, self.undo)
