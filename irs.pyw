@@ -219,6 +219,8 @@ TRAY_ALIGN_CENTER = False
 # ---------------------
 # Aliases
 # ---------------------
+sep = os.sep
+sepjoin = sep.join
 pjoin = os.path.join
 exists = os.path.exists
 getstat = os.stat
@@ -227,7 +229,11 @@ basename = os.path.basename
 dirname = os.path.dirname
 abspath = os.path.abspath
 splitext = os.path.splitext
-splitdrive = os.path.splitdrive
+splitpath = os.path.split
+makedirs = os.makedirs
+rename = os.rename
+renames = os.renames
+remove = os.remove
 
 
 # ---------------------
@@ -240,20 +246,20 @@ os.chdir(CWD)
 APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
 RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
 
-if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
+if os.path.splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
 else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, 'icon.ico')
-if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
+if os.path.splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
-if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
+if os.path.splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
 else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
 if not LOG_PATH: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
-if splitdrive(LOG_PATH)[0]: LOG_PATH = abspath(LOG_PATH)
+if os.path.splitdrive(LOG_PATH)[0]: LOG_PATH = abspath(LOG_PATH)
 else: LOG_PATH = pjoin(APPDATA_FOLDER if SAVE_LOG_FILE_TO_APPDATA_FOLDER else CWD, LOG_PATH)
 
 assert exists(ICON_PATH), f'No icon exists at {ICON_PATH}!'
-if not exists(dirname(HISTORY_PATH)): os.makedirs(dirname(HISTORY_PATH))
-if not exists(dirname(UNDO_LIST_PATH)): os.makedirs(dirname(UNDO_LIST_PATH))
-if not exists(dirname(LOG_PATH)): os.makedirs(dirname(LOG_PATH))
+if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
+if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
+if not exists(dirname(LOG_PATH)): makedirs(dirname(LOG_PATH))
 
 if isinstance(IGNORE_VIDEOS_IN_THESE_FOLDERS, str): IGNORE_VIDEOS_IN_THESE_FOLDERS = (IGNORE_VIDEOS_IN_THESE_FOLDERS,)
 IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(path.strip().lower() for path in IGNORE_VIDEOS_IN_THESE_FOLDERS)
@@ -339,8 +345,8 @@ elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKU
 else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
 
 # VIDEO_FOLDER and BACKUP_FOLDER must be on the same drive or we'll get OSError 17
-if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0] or
-    os.path.ismount(VIDEO_FOLDER) != os.path.ismount(BACKUP_FOLDER)):
+if (os.path.splitdrive(VIDEO_FOLDER)[0] != os.path.splitdrive(BACKUP_FOLDER)[0]
+    or os.path.ismount(VIDEO_FOLDER) != os.path.ismount(BACKUP_FOLDER)):
     msg = ("Your video folder and the path for saving temporary "
            "backups are not on the same drive. Instant Replay Suite "
            "cannot backup and restore videos across drives without "
@@ -353,7 +359,7 @@ if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0] or
     logging.error(msg)
     exit(17)
 
-if not exists(BACKUP_FOLDER): os.makedirs(BACKUP_FOLDER)
+if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
 
 
 # ---------------------
@@ -401,7 +407,7 @@ def delete(path: str):
     logging.info('Deleting: ' + path)
     try:
         if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
-        else: os.remove(path)
+        else: remove(path)
     except:
         logging.error(f'(!) Error while deleting file {path}: {format_exc()}')
         play_alert('error')
@@ -437,7 +443,7 @@ def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FO
 
         renamed_base = basename(renamed_path)
         logging.info(f'Renaming video to: {renamed_base}')
-        os.rename(path, renamed_path)
+        rename(path, renamed_path)                      # super-rename not needed
         logging.info('Rename successful.')
         return abspath(renamed_path), renamed_base      # use abspath to ensure consistent path formatting later on
     except Exception as error:
@@ -471,19 +477,19 @@ def refresh_backups(*paths):
             if path not in paths:
                 old_backups += 1
                 if old_backups >= MAX_BACKUPS:
-                    try: os.remove(path)
+                    try: remove(path)
                     except: logging.warning(f'Failed to delete outdated backup "{path}": {format_exc()}')
 
 
 def ffmpeg(out, cmd):
     temp_path = f'{out[:-4]}_temp.mp4'
     shutil.copy2(out, temp_path)
-    os.remove(out)
+    remove(out)
     cmd = f'ffmpeg -y {cmd.replace("%tp", temp_path)} -hide_banner -loglevel warning'
     logging.info(f'Performing ffmpeg operation: {cmd}')
     process = subprocess.Popen(cmd, shell=True)
     process.wait()
-    os.remove(temp_path)
+    remove(temp_path)
     logging.info('ffmpeg operation successful.')
 
 
@@ -496,7 +502,7 @@ def trim_off_start_in_place(clip: Clip, length: float):
 
     ext = splitext(clip_path)[-1]
     temp_path = pjoin(BACKUP_FOLDER, f'{time.time_ns()}{ext}')
-    os.renames(clip_path, temp_path)
+    renames(clip_path, temp_path)
 
     try:
         #ffmpeg(clip_path, f'-i "%tp" -ss {clip.length - length} -c:v copy -c:a copy "{clip_path}"')
@@ -510,8 +516,8 @@ def trim_off_start_in_place(clip: Clip, length: float):
         logging.info(f'Trim to {length} seconds successful.\n')
     except:
         logging.error(f'(!) Error while trimming clip: {format_exc()}')
-        if exists(clip_path): os.remove(clip_path)
-        os.rename(temp_path, clip_path)
+        if exists(clip_path): remove(clip_path)
+        renames(temp_path, clip_path)
         logging.info('Successfully restored clip after error.')
 
 
@@ -900,7 +906,7 @@ class AutoCutter:
             text_path = f'{base}_concatlist.txt'    # write list of clips to text file (with / as separator and single quotes to avoid ffmpeg errors)
 
             with open(text_path, 'w') as txt:
-                txt.write(f"file '{clip_path1.replace(os.sep, '/')}'\nfile '{clip_path2.replace(os.sep, '/')}'")
+                txt.write(f"file '{clip_path1.replace(sep, '/')}'\nfile '{clip_path2.replace(sep, '/')}'")
 
             cmd = f'ffmpeg -y -f concat -safe 0 -i "{text_path}" -c copy "{temp_path}" -hide_banner -loglevel warning'
             logging.info(cmd)
@@ -911,7 +917,7 @@ class AutoCutter:
             # attempt to move first clip to backup folder
             ext = splitext(clip_path1)[-1]
             temp_path1 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_1{ext}')
-            try: os.renames(clip_path1, temp_path1)
+            try: renames(clip_path1, temp_path1)
             except:
                 delete(temp_path)                               # delete concat clip to avoid confusing user
                 logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
@@ -920,10 +926,10 @@ class AutoCutter:
             # attempt to move second clip to backup folder
             ext = splitext(clip_path2)[-1]
             temp_path2 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_2{ext}')
-            try: os.renames(clip_path2, temp_path2)
+            try: renames(clip_path2, temp_path2)
             except:
                 delete(temp_path)                               # delete concat clip to avoid confusing user
-                os.rename(temp_path1, clip_path1)               # restore first clip if second clip failed
+                renames(temp_path1, clip_path1)                 # restore first clip if second clip failed
                 logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
                 return play_alert('error')
 
@@ -931,7 +937,7 @@ class AutoCutter:
                 undo.write(f'{basename(temp_path1)} -> {basename(temp_path2)} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
             refresh_backups(temp_path1, temp_path2)
 
-            os.rename(temp_path, clip_path1)
+            renames(temp_path, clip_path1)
             setctime(clip_path1, getstat(temp_path1).st_ctime)  # ensure edited clip retains original creation time
             self.pop(index)
             clip1.refresh()
@@ -993,11 +999,11 @@ class AutoCutter:
             old_path = clip.path
             new_path = f'{base} (compressing...){ext}'
             clip.path = new_path
-            os.rename(old_path, new_path)
+            renames(old_path, new_path)
             logging.info(f'Video size is {clip.size}. Compressing...')
             ffmpeg(clip.path, f'-i "%tp" -vcodec libx265 -crf 28 "{clip.path}"')
             logging.info(f'New compressed size is: {clip.size}')
-            os.rename(new_path, old_path)
+            renames(new_path, old_path)
             clip.path = old_path
             clip.refresh()
         except:
@@ -1018,8 +1024,8 @@ class AutoCutter:
                     alert = 'Undoing Trim' if 'trim' in action.lower() else 'Undo'
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
-                    os.remove(new)
-                    os.rename(pjoin(BACKUP_FOLDER, old), new)
+                    remove(new)
+                    renames(pjoin(BACKUP_FOLDER, old), new)         # super-rename in case folder was deleted
                     logging.info(f'Undo completed for "{action}" on clip "{new}"')
                     clip = self.get_clip(path=new)
                     if isinstance(clip, Clip): clip.refresh()       # refresh clip
@@ -1030,9 +1036,9 @@ class AutoCutter:
                     alert = 'Undoing Concatenation' if 'concat' in action.lower() else 'Undo'
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
-                    os.remove(new)
-                    os.rename(pjoin(BACKUP_FOLDER, old), new)
-                    os.rename(pjoin(BACKUP_FOLDER, old2), new2)
+                    remove(new)
+                    renames(pjoin(BACKUP_FOLDER, old), new)         # super-rename in case folder was deleted
+                    rename(pjoin(BACKUP_FOLDER, old2), new2)
 
                     index = self.last_clips.index(new)              # concat removes new2 from the list...
                     buffer = len(self.last_clips) - CLIP_BUFFER     # ...so new2 needs to be re-added
@@ -1042,7 +1048,7 @@ class AutoCutter:
                     logging.info(f'Undo completed for "{action}" on clips "{new}" and "{new2}"')
                     clip = self.get_clip(path=new)
                     if isinstance(clip, Clip): clip.refresh()       # refresh original clip
-            os.remove(UNDO_LIST_PATH)
+            remove(UNDO_LIST_PATH)
         except:
             logging.error(f'(!) Error while undoing last action: {format_exc()}')
             play_alert('error')
@@ -1101,7 +1107,7 @@ if __name__ == '__main__':
                         .replace('?size', clip.size)
                         .replace('?length', clip.length_string)
                         .replace('?clippath', path)
-                        .replace('?clipdir', os.sep.join(path.split(os.sep)[-2:]) if '?clipdir' in format else '')
+                        .replace('?clipdir', sepjoin(path.split(sep)[-2:]) if '?clipdir' in format else '')
                         .replace('?clip', clip.name))
             except IndexError: return default
             except: logging.error(f'(!) Error while generating title for system tray clip {clip} at index {index}: {cutter.last_clips} {format_exc()}')
