@@ -1116,41 +1116,48 @@ class AutoCutter:
             clip.working = False
 
 
-    # TODO what should this do when you undo actions on deleted clips? restore the clip anyways?
     def undo(self, *args, patient=True):    # NOTE: *args used to capture pystray's unused args
+        ''' Undoes an action described in `UNDO_LIST_PATH`. Each line
+            represents one action that can be undone, and consists of
+            multiple strings required for the undo, separated by "-->". '''
         try:
             with open(UNDO_LIST_PATH, 'r') as undo:
                 line = undo.readline().strip().split(' -> ')
-                if len(line) == 3:      # trim
+
+                # trimming
+                # - old -> unedited video's backup name
+                # - new -> new, edited video's full path
+                if len(line) == 3:
                     old, new, action = line
 
                     alert = 'Undoing Trim' if 'trim' in action.lower() else 'Undo'
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
-                    remove(new)
-                    renames(pjoin(BACKUP_FOLDER, old), new)         # super-rename in case folder was deleted
-                    logging.info(f'Undo completed for "{action}" on clip "{new}"')
-                    clip = self.get_clip(path=new)
-                    if isinstance(clip, Clip): clip.refresh()       # refresh clip
+                    if exists(new): remove(new)                 # delete edited video (if it still exists)
+                    renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
 
-                elif len(line) == 5:    # concatenation
+                    self.update_clip(path=new)                  # verify and refresh `new`'s clip
+                    logging.info(f'Undo completed for "{action}" on clip "{new}"')
+
+                # concatenation
+                # - old, old2 -> unedited videos' backup names
+                # - new       -> new, edited video's full path
+                # - new2      -> the video that was deleted when the original concat happened
+                elif len(line) == 5:
                     old, old2, new, new2, action = line
 
                     alert = 'Undoing Concatenation' if 'concat' in action.lower() else 'Undo'
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
-                    remove(new)
-                    renames(pjoin(BACKUP_FOLDER, old), new)         # super-rename in case folder was deleted
+                    if exists(new): remove(new)                 # delete edited video (if it still exists)
+                    renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
                     rename(pjoin(BACKUP_FOLDER, old2), new2)
 
-                    index = self.last_clips.index(new)              # concat removes new2 from the list...
-                    buffer = len(self.last_clips) - CLIP_BUFFER     # ...so new2 needs to be re-added
-                    if index < buffer: self.last_clips.insert(index + 1, new2)  # TODO make sure this math is right
-                    else: self.last_clips.insert(index + 1, Clip(new2, getstat(new2), rename=False))
-
+                    # verify/refresh `new` and re-add `new2` (concat removes `new2` from the list)
+                    index = self.update_clip(path=new, return_index=True)
+                    self.insert_clip(new2, index=index + 1)
                     logging.info(f'Undo completed for "{action}" on clips "{new}" and "{new2}"')
-                    clip = self.get_clip(path=new)
-                    if isinstance(clip, Clip): clip.refresh()       # refresh original clip
+
             remove(UNDO_LIST_PATH)
         except:
             logging.error(f'(!) Error while undoing last action: {format_exc()}')
