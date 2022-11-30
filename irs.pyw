@@ -97,9 +97,7 @@ LENGTH_DICTIONARY = {
 }
 
 
-# --- Tray Menu ---
-'''
---- CUSTOM TRAY MENU TUTORIAL ---
+'''             --- CUSTOM TRAY MENU TUTORIAL ---
 `TRAY_ADVANCED_MODE_MENU` defines the custom tray you wish to use. It's a list
 (or tuple) of items. Items may be strings which directly insert an item into
 the menu, or a single-key dictionary with a custom name as the key (string),
@@ -184,6 +182,7 @@ TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = True
 TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO = True    # TODO have auto_update turn on or off based on these settings
 TRAY_EXTRA_INFO_DATE_FORMAT = '%a %#D %#I:%M:%S%p'
 TRAY_CLIPS_PLAY_ON_CLICK = True
+
 ''' ?date - "1/17/22 12:09am" (see TRAY_RECENT_CLIP_DATE_FORMAT)
     ?recency - "2 days ago"
     ?recencyshort - "2d"
@@ -671,8 +670,9 @@ class Clip:
 
 
     def refresh(self, path=None, stat=None):
-        ''' Refreshes various statistics for the clip,
-            including creation time, size, and length. '''
+        ''' Refreshes various statistics for the clip, including creation
+            time, size, and length. Pass `path` and `stat` as minor
+            optimizations if you already have direct access to them. '''
         path = path or self.path
         stat = stat or getstat(path)
         size = f'{(stat.st_size / 1048576):.1f}mb'
@@ -719,7 +719,7 @@ class AutoCutter:
                 # sort history by creation date to resolve most issues before they arise
                 lines.sort(key=lambda clip: getstat(clip).st_ctime, reverse=True)
                 last_clips = [Clip(path, getstat(path)) if index < CLIP_BUFFER else path for index, path in enumerate(lines)]
-                last_clips.reverse()                        # .reverse() is a very fast operation
+                last_clips.reverse()                                    # .reverse() is a very fast operation
                 if last_clips: logging.info(f'Previous {len(last_clips)} clip{"s" if len(last_clips) != 1 else ""} loaded: {last_clips}')
                 else: logging.info('No previous clips detected.')
                 logging.info(f'Previous clips loaded in {time.time() - start:.2f} seconds.')
@@ -734,7 +734,7 @@ class AutoCutter:
                    "and renaming settings and restart if necessary.\n\nWould you "
                    "like to organize, rename, and add all existing clips in "
                    f"{VIDEO_FOLDER}? Click cancel to exit Instant Replay Suite.")
-            MessageBox = ctypes.windll.user32.MessageBoxW   # flags are ?-symbol, stay on top, Yes/No/Cancel
+            MessageBox = ctypes.windll.user32.MessageBoxW               # flags are ?-symbol, stay on top, Yes/No/Cancel
             response = MessageBox(None, msg, 'Welcome to Instant Replay Suite', 0x00040023)
             if response == 2:       # Cancel/X
                 logging.info('Cancel selected on welcome dialog, closing...')
@@ -767,35 +767,11 @@ class AutoCutter:
     # ---------------------
     # Helper methods
     # ---------------------
-    def pop(self, index=-1):
-        ''' Wrapper for popping from the last_clips list that converts cached paths from strings to
-            Clip objects, if necessary, with a failsafe for non-existent cached paths included.
-            Attempts to return popped value on error, if possible -- otherwise returns None. '''
-        last_clips = self.last_clips
-        popped = None
-        try:
-            popped = last_clips.pop(index)
-
-            # convert string at end of clip buffer to a Clip object
-            # this could be uncache_clip(), but we only use this here
-            cache_index = -CLIP_BUFFER          # index of the very last clip in buffer
-            while isinstance(clip := last_clips[cache_index], str):
-                if exists(clip):                # if cached string exists, convert to Clip object and break loop
-                    logging.info(f'Uncaching {clip} at index {cache_index}.')
-                    last_clips[cache_index] = Clip(clip, getstat(clip), rename=False)
-                    break
-                last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
-
-        except IndexError: pass                 # IndexError -> pop was out of range, pass and return None
-        except: logging.error(f'(!) Error while popping clip at index {index} <cache_index={cache_index}, len(last_clips)={len(last_clips)}>: {format_exc()}')
-        return popped
-
-
     def wait(self, verb=None, alert=None, min_clips=1):
-        ''' Checks if we have a clip queued up in another thread and then waits for it. Plays an associated sound
-            effect with the action we're going to perform, if specified with `alert`. Checks if we have enough
-            min_clips before returning: returns False if the action cannot continue, and True otherwise.
-            Waiting process is logged using `verb` to describe the action. '''
+        ''' Checks if a clip is queued up in another thread and waits for it.
+            Returns `False` If `self.last_clips` is smaller than `min_clips`.
+            Plays sound effect specified by `alert`. Describes action in log
+            message with `verb` if specified, otherwise `alert` is used. '''
         log_verb = verb if verb else alert
         if alert is not None: play_alert(str(alert).lower())
         if self.waiting_for_clip:
@@ -808,11 +784,12 @@ class AutoCutter:
 
 
     def get_clip(self, index=None, path=None, verb=None, alert=None, min_clips=1, patient=True, _recursive=False):
-        ''' Safely gets a clip at a specified `index` or `path`. Can wait for the clip if `patient` is True, otherwise pulls a clip immediately, which
-            is unlikely to return the wrong clip outside of intentional misuse. Plays an associated sound effect with the action we're going to
-            perform, if specified with `alert`, and avoids passing this to the wait() method. Plays an  Uses the `verb`, `alert`, and `min_clips`
-            parameters for waiting and checking if the acquired clip is working. Pops clips if they don't exist anymore. Recursively calls itself
-            until a valid clip is acquired if `patient` is True. `_recursive` used internally to avoid unnecessary waiting/alerts. '''
+        ''' Safely gets a clip at a specified `index` or `path`. Recursively
+            calls itself until a valid clip is obtained if `patient` is True,
+            otherwise raises an error if desired clip cannot be obtained.
+            `alert` plays the given sound effect, `verb` describes the action
+            for log messages, and `min_clips` is the number of clips needed
+            to exist if `patient` is True. '''
         if not _recursive:
             logging.info(f'Getting clip at index {index} (verb={verb} alert={alert} min_clips={min_clips} patient={patient})')
             if alert is not None: play_alert(str(alert).lower())
@@ -840,6 +817,107 @@ class AutoCutter:
                 raise AssertionError("Clip does not exist")
         if clip.is_working(verb if verb else alert): raise AssertionError("Clip is being worked on")
         return clip
+
+
+    def cache_clip(self):
+        ''' Converts first `Clip` object outside `CLIP_BUFFER`
+            to a string. Removes outdated/invalid clips. '''
+        try:
+            last_clips = self.last_clips
+            cache_index = -(CLIP_BUFFER + 1)    # +1 to get first clip outside buffer
+            while isinstance(clip := last_clips[cache_index], Clip):
+                if exists(clip.path):           # if cached Clip object exists, convert to string and break loop
+                    logging.info(f'Caching {clip} at index {cache_index}.')
+                    last_clips[cache_index] = clip.path
+                    break
+                last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
+        except IndexError: pass                 # IndexError -> pop was out of range, pass
+        except: logging.error(f'(!) Error while caching clip at index {cache_index} <len(last_clips)={len(last_clips)}>: {format_exc()}')
+
+
+    def insert_clip(self, path, index=None, return_index=True):
+        ''' Inserts `path` within `self.last_clips` based on its creation date
+            (unless `index` is specified). Meant for retroactively adding old
+            clips, not appending new ones. Returns the clip's index if
+            `return_index` is True, else the final clip object/string. '''
+        stat = None
+        path = abspath(path)
+        cache_index = len(self.last_clips) - CLIP_BUFFER
+        logging.info(f'Inserting "{path}" {f"at index {index}" if index else "based on creation date"}.')
+
+        if index is None:
+            stat = getstat(path)
+            index = self.index_for_time(stat.st_ctime)
+
+        # clips below the cache_index will be strings instead of full `Clip` objects
+        if index >= cache_index:
+            stat = stat or getstat(path)
+            path = Clip(path, stat, rename=False)
+            self.last_clips.insert(index, path)
+            self.cache_clip()
+        else: self.last_clips.insert(index, path)
+
+        return index if return_index else path
+
+
+    def update_clip(self, path, return_index=False):
+        ''' Refreshes a clip at `path`. If no clip object/string exists
+            for `path`, one is inserted using `self.insert_clip`. Returns
+            the clip's index if `return_index` is True, else the clip
+            object/string itself. `path` is assumed to exist. '''
+        logging.info(f'Updating clip for path "{path}".')
+        try:                # self.get_clip() is not needed here
+            index = self.index(path)
+            clip = self.last_clips[index]
+            if isinstance(clip, Clip): clip.refresh(path)
+            return index if return_index else clip
+        except ValueError:  # insert clip if self.index() raised a ValueError
+            return self.insert_clip(path, return_index=return_index)
+
+
+    def pop(self, index=-1):
+        ''' Wrapper for popping from the last_clips list that converts cached paths from strings to
+            Clip objects, if necessary, with a failsafe for non-existent cached paths included.
+            Attempts to return popped value on error, if possible -- otherwise returns None. '''
+        last_clips = self.last_clips
+        popped = None
+        try:
+            popped = last_clips.pop(index)
+
+            # convert string at end of clip buffer to a Clip object
+            # this could be uncache_clip(), but we only use this here
+            cache_index = -CLIP_BUFFER          # index of the very last clip in buffer
+            while isinstance(clip := last_clips[cache_index], str):
+                if exists(clip):                # if cached string exists, convert to Clip object and break loop
+                    logging.info(f'Uncaching {clip} at index {cache_index}.')
+                    last_clips[cache_index] = Clip(clip, getstat(clip), rename=False)
+                    break
+                last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
+
+        except IndexError: pass                 # IndexError -> pop was out of range, pass and return None
+        except: logging.error(f'(!) Error while popping clip at index {index} <cache_index={cache_index}, len(last_clips)={len(last_clips)}>: {format_exc()}')
+        return popped
+
+
+    def index(self, path):
+        ''' Returns the index of a given `path` in `self.last_clips`. '''
+        path = abspath(path)
+        for index, clip in enumerate(self.last_clips):
+            if isinstance(clip, Clip):
+                if clip.path == path: return index
+            elif clip == path: return index
+        raise ValueError(f'{path} not in last_clips')
+
+
+    def index_for_time(self, time):
+        ''' Returns the index in `self.last_clips` that `time`
+            would occupy if a clip created at that time existed. '''
+        # starts with most recent clips to check `Clip` objects first
+        for index, clip in enumerate(reversed(self.last_clips)):
+            if isinstance(clip, Clip):
+                if clip.time <= time: return len(self.last_clips) - index
+            elif getstat(clip).st_ctime <= time: return len(self.last_clips) - index
+        return 0
 
     # ---------------------
     # Acquiring clips
@@ -880,22 +958,7 @@ class AutoCutter:
                             last_clips.append(clip)
                             logging.info(f'Memory usage after adding clip: {get_memory():.2f}mb\n')
                             if manual_update: continue  # don't stop after first video on manual scans
-                            else:
-                                try:
-
-                                    # convert Clip object outside clip buffer to a string
-                                    # this could be cache_clip(), but we only use this here
-                                    cache_index = -(CLIP_BUFFER + 1)    # +1 to get first clip outside buffer
-                                    while isinstance(clip := last_clips[cache_index], Clip):
-                                        if exists(clip.path):           # if cached Clip object exists, convert to string and break loop
-                                            logging.info(f'Caching {clip} at index {cache_index}.')
-                                            last_clips[cache_index] = clip.path
-                                            break
-                                        last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
-
-                                except IndexError: pass                 # IndexError -> pop was out of range, pass
-                                except: logging.error(f'(!) Error while caching clip at index {cache_index} <len(last_clips)={len(last_clips)}>: {format_exc()}')
-                                return
+                            else: return self.cache_clip()
 
         except:
             logging.error(f'(!) Error while checking for new clips: {format_exc()}')
@@ -939,6 +1002,7 @@ class AutoCutter:
             clip2 = self.get_clip(index=index, min_clips=2, patient=patient)
             clip_path1 = clip1.path
             clip_path2 = clip2.path
+            logging.info(f'Concatenating clips "{clip_path1}" and "{clip_path2}"')
 
             base, ext = splitext(clip_path1)
             temp_path = f'{base}_concat{ext}'
@@ -979,7 +1043,7 @@ class AutoCutter:
             renames(temp_path, clip_path1)
             setctime(clip_path1, getstat(temp_path1).st_ctime)  # ensure edited clip retains original creation time
             self.pop(index)
-            clip1.refresh()
+            clip1.refresh(clip_path1)                           # pass `clip_path1` as slight optimization
             logging.info('Clips concatenated, renamed, popped, refreshed, and cleaned up successfully.')
         except AssertionError: return
         except:
@@ -1044,7 +1108,7 @@ class AutoCutter:
             logging.info(f'New compressed size is: {clip.size}')
             renames(new_path, old_path)
             clip.path = old_path
-            clip.refresh()
+            clip.refresh(old_path)
         except:
             logging.error(f'(!) Error while compressing clip: {format_exc()}')
             play_alert('error')
@@ -1110,7 +1174,8 @@ if __name__ == '__main__':
         # ---------------------
         def get_clip_tray_title(index: int, default: str = TRAY_RECENT_CLIP_DEFAULT_TEXT) -> str:
             ''' Returns the title of a recent clip item by its `index`.
-                If no clip exists at that index, `default` is returned. '''
+                If no clip exists at that index, `default` is returned.
+                Refreshes and removes edited/deleted clips. '''
             try:
                 clip = cutter.last_clips[index]
                 path = clip.path
