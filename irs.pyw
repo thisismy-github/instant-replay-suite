@@ -238,7 +238,6 @@ remove = os.remove
 # ---------------------
 # Constants & paths
 # ---------------------
-CLIP_BUFFER = max(5, TRAY_RECENT_CLIP_COUNT)
 CWD = dirname(os.path.realpath(__file__))
 os.chdir(CWD)
 
@@ -263,7 +262,11 @@ if not exists(dirname(LOG_PATH)): makedirs(dirname(LOG_PATH))
 if isinstance(IGNORE_VIDEOS_IN_THESE_FOLDERS, str): IGNORE_VIDEOS_IN_THESE_FOLDERS = (IGNORE_VIDEOS_IN_THESE_FOLDERS,)
 IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(path.strip().lower() for path in IGNORE_VIDEOS_IN_THESE_FOLDERS)
 
-# every clip in the menu + the first one outside the menu should be a Clip object
+# `CLIP_BUFFER` is how many recent clips should be `Clip` objects instead of just strings
+# every clip in the menu + the first one outside the menu should be a `Clip` object
+CLIP_BUFFER = max(2, TRAY_RECENT_CLIP_COUNT) + 1
+
+# misc constants
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY = '?recency' in TRAY_RECENT_CLIP_NAME_FORMAT
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT = '?recencyshort' in TRAY_RECENT_CLIP_NAME_FORMAT
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
@@ -715,7 +718,7 @@ class AutoCutter:
 
                 # sort history by creation date to resolve most issues before they arise
                 lines.sort(key=lambda clip: getstat(clip).st_ctime, reverse=True)
-                last_clips = [Clip(path, getstat(path)) if index <= CLIP_BUFFER else path for index, path in enumerate(lines)]
+                last_clips = [Clip(path, getstat(path)) if index < CLIP_BUFFER else path for index, path in enumerate(lines)]
                 last_clips.reverse()                        # .reverse() is a very fast operation
                 if last_clips: logging.info(f'Previous {len(last_clips)} clip{"s" if len(last_clips) != 1 else ""} loaded: {last_clips}')
                 else: logging.info('No previous clips detected.')
@@ -775,7 +778,7 @@ class AutoCutter:
 
             # convert string at end of clip buffer to a Clip object
             # this could be uncache_clip(), but we only use this here
-            cache_index = -(CLIP_BUFFER + 1)    # +1 to check very last clip in buffer
+            cache_index = -CLIP_BUFFER          # index of the very last clip in buffer
             while isinstance(clip := last_clips[cache_index], str):
                 if exists(clip):                # if cached string exists, convert to Clip object and break loop
                     logging.info(f'Uncaching {clip} at index {cache_index}.')
@@ -882,7 +885,7 @@ class AutoCutter:
 
                                     # convert Clip object outside clip buffer to a string
                                     # this could be cache_clip(), but we only use this here
-                                    cache_index = -(CLIP_BUFFER + 2)    # +2 to check first clip outside buffer
+                                    cache_index = -(CLIP_BUFFER + 1)    # +1 to get first clip outside buffer
                                     while isinstance(clip := last_clips[cache_index], Clip):
                                         if exists(clip.path):           # if cached Clip object exists, convert to string and break loop
                                             logging.info(f'Caching {clip} at index {cache_index}.')
@@ -901,9 +904,9 @@ class AutoCutter:
             if manual_update:   # sort last_clips and then verify the cache
                 last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
                 for index, clip in enumerate(reversed(last_clips)):
-                    if isinstance(clip, Clip) and index > CLIP_BUFFER:
+                    if isinstance(clip, Clip) and index >= CLIP_BUFFER:
                         last_clips[-index - 1] = clip.path
-                    elif isinstance(clip, str) and index <= CLIP_BUFFER:
+                    elif isinstance(clip, str) and index < CLIP_BUFFER:
                         last_clips[-index - 1] = Clip(path, stat, rename=RENAME)
                 logging.info('Manual scan complete.')
             self.waiting_for_clip = False
