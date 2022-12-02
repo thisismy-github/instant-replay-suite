@@ -443,7 +443,8 @@ def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FO
         renamed_path = f'{renamed_path_no_ext}.mp4'
 
         count_detected = '?count' in renamed_path_no_ext
-        if count_detected or exists(renamed_path):
+        protected_paths = cutter.protected_paths    # this is exactly what i want to avoid but i'm leaving it for now
+        if count_detected or exists(renamed_path) or renamed_path in protected_paths:
             count = RENAME_COUNT_START_NUMBER
             if not count_detected:      # if forced to add a number, use windows-style count: start from (2)
                 count = 2
@@ -451,7 +452,7 @@ def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FO
             while True:
                 count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
                 renamed_path = f'{renamed_path_no_ext.replace("?count", count_string)}.mp4'
-                if not exists(renamed_path): break
+                if not exists(renamed_path) and renamed_path not in protected_paths: break
                 count += 1
 
         renamed_base = basename(renamed_path)
@@ -479,21 +480,6 @@ def play_alert(sound: str):
         logging.warning('(!) Alert doesn\'t exist at path ' + path)
 
 
-def refresh_backups(*paths):
-    ''' Deletes outdated backup files. Ignores `paths` while counting,
-        even if `MAX_BACKUPS` is 0. Assumes all backups use the format
-        "{time.time_ns()}*.mp4". '''
-    old_backups = 0
-    for filename in reversed(os.listdir(BACKUP_FOLDER)):
-        if filename[-4:] != '.txt' and filename[:19].isnumeric():
-            path = pjoin(BACKUP_FOLDER, filename)
-            if path not in paths:
-                old_backups += 1
-                if old_backups >= MAX_BACKUPS:
-                    try: remove(path)
-                    except: logging.warning(f'Failed to delete outdated backup "{path}": {format_exc()}')
-
-
 def ffmpeg(out, cmd):
     temp_path = f'{out[:-4]}_temp.mp4'
     shutil.copy2(out, temp_path)
@@ -504,34 +490,6 @@ def ffmpeg(out, cmd):
     process.wait()
     remove(temp_path)
     logging.info('ffmpeg operation successful.')
-
-
-def trim_off_start_in_place(clip: Clip, length: float):
-    clip_path = clip.path
-    assert exists(clip_path), f'Path {clip_path} does not exist!'
-    logging.info(f'Trimming clip {clip.name} to {length} seconds')
-    logging.info(f'Clip is {clip.length:.2f} seconds long.')
-    if clip.length <= length: return logging.info(f'(?) Video is only {clip.length:.2f} seconds long and cannot be trimmed to {length} seconds.')
-
-    ext = splitext(clip_path)[-1]
-    temp_path = pjoin(BACKUP_FOLDER, f'{time.time_ns()}{ext}')
-    renames(clip_path, temp_path)
-
-    try:
-        #ffmpeg(clip_path, f'-i "%tp" -ss {clip.length - length} -c:v copy -c:a copy "{clip_path}"')
-        cmd = f'ffmpeg -y -i "{temp_path}" -ss {clip.length - length} -c:v copy -c:a copy "{clip_path}" -hide_banner -loglevel warning'
-        logging.info(cmd)
-        process = subprocess.Popen(cmd, shell=True)
-        process.wait()
-        with open(UNDO_LIST_PATH, 'w') as undo: undo.write(f'{basename(temp_path)} -> {clip_path} -> Trimmed to {length:g} seconds\n')
-        refresh_backups(temp_path)
-        setctime(clip_path, getstat(temp_path).st_ctime)    # ensure edited clip retains original creation time
-        logging.info(f'Trim to {length} seconds successful.\n')
-    except:
-        logging.error(f'(!) Error while trimming clip: {format_exc()}')
-        if exists(clip_path): remove(clip_path)
-        renames(temp_path, clip_path)
-        logging.info('Successfully restored clip after error.')
 
 
 def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
@@ -645,7 +603,7 @@ keyboard._KeyboardListener.pre_process_event = pre_process_event
 # Clip class
 # ---------------------
 class Clip:
-    __slots__ = ('working', 'path', 'name', 'time', 'raw_size', 'size', 'date', 'full_date', 'length', 'length_string', 'length_size_string')
+    __slots__ = ('working', 'path', 'name', 'game', 'time', 'raw_size', 'size', 'date', 'full_date', 'length', 'length_string', 'length_size_string')
     def __repr__(self): return self.name
 
     def __init__(self, path, stat, rename=False):
@@ -655,6 +613,7 @@ class Clip:
         size = f'{(stat.st_size / 1048576):.1f}mb'
 
         self.path = path
+        self.game = basename(dirname(path))
         self.time = stat.st_ctime
         self.raw_size = stat.st_size
         self.size = size
@@ -700,11 +659,21 @@ class Clip:
 # Main class
 # ---------------------
 class AutoCutter:
-    __slots__ = ('waiting_for_clip', 'last_clips')
+    __slots__ = ('waiting_for_clip', 'protected_paths', 'last_clips')
 
     def __init__(self):
         start = time.time()
         self.waiting_for_clip = False
+
+    # --- protecting backup paths ---
+        protected_paths = []
+        for path in self.get_all_backups():
+            path_dirname, path_basename = os.path.split(path)
+            if '.' not in path_basename[20:]: continue                  # skip files with empty basenames
+            protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
+            protected_paths.append(protected_path)
+        logging.info(f'Current protected paths: {protected_paths}')
+        self.protected_paths = protected_paths
         if exists(HISTORY_PATH):
             with open(HISTORY_PATH, 'r') as history:
                 # get all valid unique paths from history file, create a buffer of clip objects, then start caching paths as strings outside buffer
@@ -919,6 +888,48 @@ class AutoCutter:
             elif getstat(clip).st_ctime <= time: return len(self.last_clips) - index
         return 0
 
+
+    def get_all_backups(self):
+        ''' Returns all backups in `BACKUP_FOLDER` as a flattened list.
+            Assumes all backups start with `time.time_ns()`. '''
+        all_backups = []
+        for folder in os.listdir(BACKUP_FOLDER):
+            try:                                    # get all backup .mp4s and delete empty subfolders
+                subfolder = pjoin(BACKUP_FOLDER, folder)
+                files = os.listdir(subfolder)
+                if files: all_backups.extend(pjoin(subfolder, file) for file in files if file[:19].isnumeric())
+                else: os.rmdir(subfolder)
+            except: pass
+        return all_backups
+
+
+    def refresh_backups(self, *protected_paths):
+        ''' Deletes outdated backup files and empty backup folders. Ignores
+            `protected_paths` while counting, even if `MAX_BACKUPS` is 0.
+            Outdated files are removed from `self.protected_paths`.
+            Assumes all backups start with `time.time_ns()`. '''
+        old_backups = 0
+        for path in sorted(self.get_all_backups(), reverse=True):
+            if path not in protected_paths:
+                old_backups += 1
+                if old_backups >= MAX_BACKUPS:      # backup is too old
+                    try:    # remove backup, remove its folder if empty, and remove its protected status
+                        remove(path)
+                        path_dirname, path_basename = os.path.split(path)
+                        if not os.listdir(dirname(path)): os.rmdir(path_dirname)
+
+                        protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
+                        try: self.protected_paths.remove(protected_path)
+                        except ValueError: pass
+                    except: logging.warning(f'Failed to delete outdated backup "{path}": {format_exc()}')
+
+        # add new protected paths
+        for path in protected_paths:
+            path_dirname, path_basename = os.path.split(path)
+            protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
+            logging.info(f'Adding protected path: {protected_path}')
+            self.protected_paths.append(protected_path)
+
     # ---------------------
     # Acquiring clips
     # ---------------------
@@ -979,14 +990,42 @@ class AutoCutter:
     # Clip actions
     # ---------------------
     def trim_clip(self, length, index=-1, patient=True):
-        try:    # recusively trim until the desired clip exists or no clips remain
+        ''' Trims the clip at `index` down to the last `length` seconds. Clip
+            is edited in-place (the original is moved to `BACKUP_DIR`). '''
+        try:
             clip = self.get_clip(index, verb='Trim', alert=length, min_clips=1, patient=patient)
-            trim_off_start_in_place(clip, length)
-            clip.refresh()
+            clip_path = clip.path
+            clip_length = clip.length
+            logging.info(f'Trimming clip {clip.name} to {length} seconds')
+            logging.info(f'Clip is {clip_length:.2f} seconds long.')
+            if clip_length <= length: return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
+
+            relative_temp_path = pjoin(clip.game, f'{time.time_ns()}.{clip.name}')
+            temp_path = pjoin(BACKUP_FOLDER, relative_temp_path)
+            renames(clip_path, temp_path)
+
+            try:
+                cmd = f'ffmpeg -y -i "{temp_path}" -ss {clip_length - length} -c:v copy -c:a copy "{clip_path}" -hide_banner -loglevel warning'
+                logging.info(cmd)
+                process = subprocess.Popen(cmd, shell=True)
+                process.wait()
+
+                with open(UNDO_LIST_PATH, 'w') as undo:
+                    undo.write(f'{relative_temp_path} -> {clip_path} -> Trimmed to {length:g} seconds\n')
+                self.refresh_backups(temp_path)
+
+                setctime(clip_path, clip.time)          # ensure edited clip retains original creation time
+                clip.refresh()
+                logging.info(f'Trim to {length} seconds successful.\n')
+            except:
+                logging.error(f'(!) Error WHILE trimming clip: {format_exc()}')
+                if exists(clip_path): remove(clip_path)
+                renames(temp_path, clip_path)
+                logging.info('Successfully restored clip after error.')
 
         except (IndexError, AssertionError): return
         except:
-            logging.error(f'(!) Error while cutting last clip: {format_exc()}')
+            logging.error(f'(!) Error BEFORE trimming clip: {format_exc()}')
             play_alert('error')
 
 
@@ -1018,8 +1057,8 @@ class AutoCutter:
             delete(text_path)
 
             # attempt to move first clip to backup folder
-            ext = splitext(clip_path1)[-1]
-            temp_path1 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_1{ext}')
+            relative_temp_path1 = pjoin(clip1.game, f'{time.time_ns()}.{clip1.name}')
+            temp_path1 = pjoin(BACKUP_FOLDER, relative_temp_path1)
             try: renames(clip_path1, temp_path1)
             except:
                 delete(temp_path)                               # delete concat clip to avoid confusing user
@@ -1027,8 +1066,8 @@ class AutoCutter:
                 return play_alert('error')
 
             # attempt to move second clip to backup folder
-            ext = splitext(clip_path2)[-1]
-            temp_path2 = pjoin(BACKUP_FOLDER, f'{time.time_ns()}_2{ext}')
+            relative_temp_path2 = pjoin(clip2.game, f'{time.time_ns()}.{clip2.name}')
+            temp_path2 = pjoin(BACKUP_FOLDER, relative_temp_path2)
             try: renames(clip_path2, temp_path2)
             except:
                 delete(temp_path)                               # delete concat clip to avoid confusing user
@@ -1037,8 +1076,8 @@ class AutoCutter:
                 return play_alert('error')
 
             with open(UNDO_LIST_PATH, 'w') as undo:
-                undo.write(f'{basename(temp_path1)} -> {basename(temp_path2)} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
-            refresh_backups(temp_path1, temp_path2)
+                undo.write(f'{relative_temp_path1} -> {relative_temp_path2} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
+            self.refresh_backups(temp_path1, temp_path2)
 
             renames(temp_path, clip_path1)
             setctime(clip_path1, getstat(temp_path1).st_ctime)  # ensure edited clip retains original creation time
@@ -1150,6 +1189,10 @@ class AutoCutter:
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
                     if exists(new): remove(new)                 # delete edited video (if it still exists)
+                    if exists(new2):                            # `new2` has been replaced? (this should NOT happen)
+                        logging.warn('(!) Clip shares name with concatenated clip that should have been protected: ' + new2)
+                        base, ext = os.path.splitext(new2)
+                        new2 = f'{base} (pre-concat){ext}'      # add " (pre-concat)" marker to `new2`
                     renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
                     rename(pjoin(BACKUP_FOLDER, old2), new2)
 
