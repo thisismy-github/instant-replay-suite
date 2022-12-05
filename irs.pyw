@@ -1,34 +1,31 @@
 ''' NVIDIA Instant Replay auto-cutter 1/11/22 '''
 from __future__ import annotations  # 0.10mb  / 13.45       https://stackoverflow.com/questions/33533148/how-do-i-type-hint-a-method-with-the-type-of-the-enclosing-class
-import tracemalloc                  # 0.125mb / 13.475mb
 import gc                           # 0.275mb / 13.625mb    <- Heavy, but probably worth it
 import os                           # 0.10mb  / 13.45mb
 import sys                          # 0.125mb / 13.475mb
 import time                         # 0.125mb / 13.475mb
-import subprocess                   # 0.125mb / 13.475mb
-import shutil                       # 0.125mb / 13.475mb
+import ctypes
 import logging                      # 0.65mb  / 14.00mb
-
-import keyboard                     # 2.05mb  / 15.40mb     <- TODO Find lighter alternative?
-import pymediainfo                  # 3.75mb  / 17.1mb      https://stackoverflow.com/questions/15041103/get-total-length-of-videos-in-a-particular-directory-in-python
-import winsound                     # 0.21mb  / 13.56mb     ^ https://stackoverflow.com/questions/3844430/how-to-get-the-duration-of-a-video-in-python
-import pystray                      # 3.29mb  / 16.64mb
-from PIL import Image               # 2.13mb  / 15.48mb
+import subprocess                   # 0.125mb / 13.475mb
+import tracemalloc                  # 0.125mb / 13.475mb
+from threading import Thread        # 0.125mb / 13.475mb
 from datetime import datetime       # 0.125mb / 13.475mb
 from traceback import format_exc    # 0.35mb  / 13.70mb     <- Heavy, but probably worth it
-from threading import Thread        # 0.125mb / 13.475mb
 
-import ctypes
+import pystray                      # 3.29mb  / 16.64mb
+import keyboard                     # 2.05mb  / 15.40mb
+import winsound                     # 0.21mb  / 13.56mb     ↓ https://stackoverflow.com/questions/3844430/how-to-get-the-duration-of-a-video-in-python
+import pymediainfo                  # 3.75mb  / 17.1mb      https://stackoverflow.com/questions/15041103/get-total-length-of-videos-in-a-particular-directory-in-python
+from PIL import Image               # 2.13mb  / 15.48mb
 from pystray._util import win32
 from win32_setctime import setctime
-tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 # Starts with roughly ~36.7mb of memory usage. Roughly 9.78mb combined from imports alone, without psutil and cv2/pymediainfo (9.63mb w/o tracemalloc).
-# Detecting shadowplay videos via their encoding is possible (but useless) https://github.com/rebane2001/NvidiaInstantRename/blob/mane/InstantRenameCLI.py
+tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 '''
 TODO extended backup system with more than 1 undo possible at a time
-TODO add deletion "confirmation"? (press delete hotkey twice? add delete submenu for the tray?)
+TODO add stuff for multi-track recordings
 TODO show what "action" you can undo in the menu in some way (as a submenu?)
 TODO add dedicated config file, possibly separate file for defining tray menu
 TODO ability to auto-rename folders using same system as aliases
@@ -375,6 +372,9 @@ if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
 get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
 
 def verify_ffmpeg():
+    ''' Checks if FFmpeg exists. If it isn't in the script's folder,
+        the user's PATH system variable is checked. If still not found,
+        a message box is displayed and the script exits. '''
     if exists('ffmpeg.exe'): return
     else:
         for path in os.environ.get('PATH', '').split(';'):
@@ -398,12 +398,17 @@ You can download FFmpeg for Windows from here: https://www.gyan.dev/ffmpeg/build
 
 
 def quit_tray(icon):
+    ''' Quits pystray `icon`, saves history,
+        does final cleanup, and exits script. '''
     logging.info('Closing system tray icon and exiting suite.')
     icon.visible = False
     icon.stop()
     tracemalloc.stop()
+
     logging.info(f'Clip history: {cutter.last_clips}')
-    with open(HISTORY_PATH, 'w') as history: history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
+    with open(HISTORY_PATH, 'w') as history:
+        history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
+
     try: sys.exit(0)
     except SystemExit: pass         # avoid harmless yet annoying SystemExit error
 
@@ -440,35 +445,40 @@ def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FO
 
         renamed_base_no_ext = name_format.replace('?game', game).replace('?date', date.strftime(date_format))
         renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
-        renamed_path = f'{renamed_path_no_ext}.mp4'
+        renamed_path = renamed_path_no_ext + '.mp4'
 
         count_detected = '?count' in renamed_path_no_ext
         protected_paths = cutter.protected_paths    # this is exactly what i want to avoid but i'm leaving it for now
         if count_detected or exists(renamed_path) or renamed_path in protected_paths:
             count = RENAME_COUNT_START_NUMBER
-            if not count_detected:      # if forced to add a number, use windows-style count: start from (2)
+            if not count_detected:                  # if forced to add number, use windows-style count: start from (2)
                 count = 2
-                renamed_path_no_ext = f'{renamed_path_no_ext} (?count)'
+                renamed_path_no_ext += ' (?count)'
             while True:
                 count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
-                renamed_path = f'{renamed_path_no_ext.replace("?count", count_string)}.mp4'
+                renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
                 if not exists(renamed_path) and renamed_path not in protected_paths: break
                 count += 1
 
         renamed_base = basename(renamed_path)
         logging.info(f'Renaming video to: {renamed_base}')
-        rename(path, renamed_path)                      # super-rename not needed
+        rename(path, renamed_path)                  # super-rename not needed
         logging.info('Rename successful.')
-        return abspath(renamed_path), renamed_base      # use abspath to ensure consistent path formatting later on
+        return abspath(renamed_path), renamed_base  # use abspath to ensure consistent path formatting later on
     except Exception as error:
         logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
         return path, basename(path)
 
 
 def play_alert(sound: str):
+    ''' Plays a system-wide audio alert. `sound` is the filename of a WAV
+        file located within `RESOURCE_FOLDER`. Plays a generic OS alert if
+        `sound` doesn't exist, or a generic OS error sound if `sound` is
+        "error" and "error.wav" doesn't exist. '''
     if not AUDIO: return
     path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
     logging.info('Playing alert: ' + path)
+
     if exists(path):
         try: winsound.PlaySound(path, winsound.SND_ASYNC)
         except:
@@ -480,19 +490,9 @@ def play_alert(sound: str):
         logging.warning('(!) Alert doesn\'t exist at path ' + path)
 
 
-def ffmpeg(out, cmd):
-    temp_path = f'{out[:-4]}_temp.mp4'
-    shutil.copy2(out, temp_path)
-    remove(out)
-    cmd = f'ffmpeg -y {cmd.replace("%tp", temp_path)} -hide_banner -loglevel warning'
-    logging.info(f'Performing ffmpeg operation: {cmd}')
-    process = subprocess.Popen(cmd, shell=True)
-    process.wait()
-    remove(temp_path)
-    logging.info('ffmpeg operation successful.')
-
-
 def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
+    ''' Returns a precise duration for the video at `path`.
+        Returns 0 if `path` is corrupt or an invalid format. '''
     for track in pymediainfo.MediaInfo.parse(path).tracks:
         if track.track_type == "Video":
             return track.duration / 1000
@@ -674,6 +674,9 @@ class AutoCutter:
             protected_paths.append(protected_path)
         logging.info(f'Current protected paths: {protected_paths}')
         self.protected_paths = protected_paths
+
+    # --- importing history ---
+        # if history file exists, import clips
         if exists(HISTORY_PATH):
             with open(HISTORY_PATH, 'r') as history:
                 # get all valid unique paths from history file, create a buffer of clip objects, then start caching paths as strings outside buffer
@@ -696,6 +699,8 @@ class AutoCutter:
                 self.last_clips = last_clips
                 if CHECK_FOR_NEW_CLIPS_ON_LAUNCH: self.check_for_clips(manual_update=True)
                 del lines
+
+        # no history file -- run first-time setup
         else:
             self.last_clips = []
             msg = ("It appears to be your first time running Instant Replay Suite "
@@ -714,6 +719,7 @@ class AutoCutter:
                 logging.info('Yes selected on welcome dialog, looking for pre-existing clips...')
                 self.check_for_clips(manual_update=True, from_time=0)
 
+    # --- hotkeys ---
         # define instant replay hotkey BEFORE we do the dumb garbage below it
         keyboard.add_hotkey(INSTANT_REPLAY_HOTKEY, self.check_for_clips)
 
@@ -939,9 +945,40 @@ class AutoCutter:
 
 
     def check_for_clips_thread(self, manual_update=False, from_time=None):
+        ''' Scans `VIDEO_FOLDER` for new .mp4 files to add as clips to
+            `self.last_clips`. Runs automatically after every instant-replay.
+            Only checks the base-level files inside `VIDEO_FOLDER`'s
+            base-level subfolders, as these are the only places ShadowPlay
+            will save a recording. Files within nested subfolders or within
+            `VIDEO_FOLDER`'s base directory will be ignored. Ignores the
+            backup folder (if present) and `IGNORE_VIDEOS_IN_THESE_FOLDERS`.
+
+            If `manual_update` is False:
+                - A 3 second delay is used to wait for the last instant-replay
+                  to finish saving.
+                - The minimum timestamp for new clips is the current time
+                  minus one second.
+                - The scan ends after the first "new" clip is discovered.
+
+            If `manual_update` is True:
+                - The minimum timestamp is the creation date of the latest
+                  clip in `self.last_clips`, unless `from_time` is specified.
+                - All "new" clips discovered are added.
+                - After the scan, `self.last_clips` is sorted and the cache is
+                  verified to ensure `Clip` objects outside `CLIP_BUFFER` have
+                  become strings, and vice versa.
+
+            NOTE: Detecting ShadowPlay videos via their encoding is possible.
+            This would prevent non-ShadowPlay clips from being detected for
+            good, but I'm not decided as to whether detecting non-ShadowPlay
+            clips is a good thing or not. The limited scanning range mentioned
+            above is a good middle-ground for now:
+            https://github.com/rebane2001/NvidiaInstantRename/blob/mane/InstantRenameCLI.py '''
         try:
+
+            # determine the timestamp that all new videos should be after
             last_clips = self.last_clips
-            if not manual_update:
+            if not manual_update:                       # wait for instant replay to finish saving
                 logging.info('Instant replay detected! Waiting 3 seconds...')
                 last_clip_time = time.time() - 1
                 time.sleep(3)
@@ -953,7 +990,7 @@ class AutoCutter:
             for filename in os.listdir(VIDEO_FOLDER):
                 if filename in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
                 folder = pjoin(VIDEO_FOLDER, filename)
-                if folder == BACKUP_FOLDER: continue
+                if folder == BACKUP_FOLDER: continue    # user might use absolute path for backup folder
 
                 if os.path.isdir(folder):
                     for file in os.listdir(folder):
@@ -974,6 +1011,7 @@ class AutoCutter:
         except:
             logging.error(f'(!) Error while checking for new clips: {format_exc()}')
             play_alert('error')
+
         finally:
             if manual_update:   # sort last_clips and then verify the cache
                 last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
@@ -1044,9 +1082,8 @@ class AutoCutter:
             logging.info(f'Concatenating clips "{clip_path1}" and "{clip_path2}"')
 
             base, ext = splitext(clip_path1)
-            temp_path = f'{base}_concat{ext}'
+            temp_path = f'{base}_concat{ext}'       # the temporary name for our final .mp4 file
             text_path = f'{base}_concatlist.txt'    # write list of clips to text file (with / as separator and single quotes to avoid ffmpeg errors)
-
             with open(text_path, 'w') as txt:
                 txt.write(f"file '{clip_path1.replace(sep, '/')}'\nfile '{clip_path2.replace(sep, '/')}'")
 
@@ -1118,6 +1155,8 @@ class AutoCutter:
             play_alert('error')
 
 
+    # TODO unused and not fully implemented. should not happen automatically.
+    # TODO also, these two methods are the only usage of `Clip.working`.
     def compress_clip(self, index=-1, patient=True):
         try:    # rename clip to include (comressing...), compress, then rename back and refresh
             clip = self.get_clip(index, verb='Compress', patient=patient)
@@ -1143,7 +1182,7 @@ class AutoCutter:
             clip.path = new_path
             renames(old_path, new_path)
             logging.info(f'Video size is {clip.size}. Compressing...')
-            ffmpeg(clip.path, f'-i "%tp" -vcodec libx265 -crf 28 "{clip.path}"')
+            #ffmpeg(clip.path, f'-i "%tp" -vcodec libx265 -crf 28 "{clip.path}"')
             logging.info(f'New compressed size is: {clip.size}')
             renames(new_path, old_path)
             clip.path = old_path
