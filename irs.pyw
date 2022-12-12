@@ -49,6 +49,7 @@ TODO pystray subclass improvements
 #  Aliases
 #  Base constants
 #  Logging
+#  Video path
 #  Settings
 #  Registry settings
 #  Other constants & paths
@@ -115,6 +116,24 @@ logging.basicConfig(
     style='{',
     handlers=(logging.FileHandler(LOG_PATH, 'w', delay=False),
               logging.StreamHandler()))
+
+
+# ---------------------
+# Video path
+# ---------------------
+# We do this before reading config file to set a hint for whether or not
+# `SAVE_BACKUPS_TO_VIDEO_FOLDER` should default to True or False later.
+try:                # gets ShadowPlay's video path from the registry
+    import winreg   # NOTE: ShadowPlay settings are encoded in utf-16 and have a NULL character at the end
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS')
+    VIDEO_FOLDER = winreg.QueryValueEx(key, 'DefaultPathW')[0].decode('utf-16')[:-1]
+except:
+    logging.warning(f'(!) Could not get video path from registry: {format_exc()}')
+    VIDEO_FOLDER = None
+
+# True if `VIDEO_FOLDER` and `CWD` are on different drives
+BACKUP_FOLDER_HINT = (VIDEO_FOLDER and (splitdrive(VIDEO_FOLDER)[0] != splitdrive(CWD)[0]
+                                        or ismount(VIDEO_FOLDER) != ismount(CWD)))
 
 
 # ---------------------
@@ -211,7 +230,7 @@ in [Paths] is not an absolute path.''')
 SAVE_HISTORY_TO_APPDATA_FOLDER = cfg.load('SAVE_HISTORY_TO_APPDATA_FOLDER', False)
 SAVE_UNDO_LIST_TO_APPDATA_FOLDER = cfg.load('SAVE_UNDO_LIST_TO_APPDATA_FOLDER', False)
 SAVE_BACKUPS_TO_APPDATA_FOLDER = cfg.load('SAVE_BACKUPS_TO_APPDATA_FOLDER', False)
-SAVE_BACKUPS_TO_VIDEO_FOLDER = cfg.load('SAVE_BACKUPS_TO_VIDEO_FOLDER', False)
+SAVE_BACKUPS_TO_VIDEO_FOLDER = cfg.load('SAVE_BACKUPS_TO_VIDEO_FOLDER', BACKUP_FOLDER_HINT)
 
 cfg.setSection(' --- Ignored Folders --- ')
 cfg.comment('''Subfolders in the video folder that will be ignored during scans.
@@ -291,20 +310,17 @@ INSTANT_REPLAY_HOTKEY_OVERRIDE = cfg.load('INSTANT_REPLAY_HOTKEY_OVERRIDE')
 TRAY_ALIGN_CENTER = cfg.load('ALWAYS_CENTER_ALIGN_TRAY_MENU_ON_OPEN', False)
 
 
-# ---------------------
-# Registry Settings
-# ---------------------
-# get ShadowPlay video path from registry
-if not VIDEO_FOLDER_OVERRIDE:
-    try:
-        import winreg   # NOTE: ShadowPlay settings are encoded in utf-16 and have a NULL character at the end
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS')
-        VIDEO_FOLDER = winreg.QueryValueEx(key, 'DefaultPathW')[0].decode('utf-16')[:-1]
-    except:
-        logging.critical(f'Could not find video path from registry: {format_exc()}\n\nPlease set VIDEO_FOLDER_OVERRIDE.')
-        sys.exit(2)
-else: VIDEO_FOLDER = VIDEO_FOLDER_OVERRIDE.strip()
-logging.info('Video directory: ' + VIDEO_FOLDER)
+# ------------------------
+# Registry settings
+# ------------------------
+# confirm video folder has been set
+if VIDEO_FOLDER_OVERRIDE:
+    VIDEO_FOLDER = VIDEO_FOLDER_OVERRIDE.strip()
+    logging.info('Overridden video directory: ' + VIDEO_FOLDER)
+elif VIDEO_FOLDER is None:
+    logging.critical('No video path detected.\n\nPlease set VIDEO_FOLDER_OVERRIDE.')
+    exit(2)
+else: logging.info('Video directory: ' + VIDEO_FOLDER)
 
 # get Instant Replay hotkey from registry (each key is a separate value)
 if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
@@ -1624,6 +1640,7 @@ if __name__ == '__main__':
         del SEPARATOR
         del RECENT_CLIPS_BASE
         del TRAY_ADVANCED_MODE_MENU
+        del BACKUP_FOLDER_HINT
         del LENGTH_DICTIONARY
         del INSTANT_REPLAY_HOTKEY
         del CONCATENATE_HOTKEY
