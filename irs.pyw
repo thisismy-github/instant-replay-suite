@@ -52,9 +52,9 @@ TODO pystray subclass improvements
 #  Settings
 #  Registry settings
 #  Other constants & paths
+#  Utility functions
 #  Reading custom tray menu
 #  Backup dir cleanup
-#  Utility functions
 #  Custom Pystray class
 #  Custom keyboard listener
 #  Clip class
@@ -93,7 +93,6 @@ remove = os.remove
 # ---------------------
 # Base constants
 # ---------------------
-
 # current working directory
 CWD = dirname(os.path.realpath(__file__))
 os.chdir(CWD)
@@ -383,6 +382,126 @@ elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKU
 else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
 
 
+# ---------------------
+# Utility functions
+# ---------------------
+#get_memory = lambda: psutil.Process().memory_info().rss / (1024 * 1024)
+get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
+
+def delete(path: str) -> None:
+    ''' Robustly deletes a given `path`. '''
+    logging.info('Deleting: ' + path)
+    try:
+        if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
+        else: remove(path)
+    except:
+        logging.error(f'(!) Error while deleting file {path}: {format_exc()}')
+        play_alert('error')
+
+
+def renames(old: str, new: str) -> None:
+    ''' `os.py`'s super-rename, but without deleting empty directories. '''
+    head, tail = splitpath(new)
+    if head and tail and not exists(head): makedirs(head)
+    rename(old, new)
+
+
+def auto_rename_clip(path: str) -> None:
+    ''' Renames `path` according to `RENAME_FORMAT` and `RENAME_DATE_FORMAT`,
+        so long as `path` ends with a date formatted as `%Y.%m.%d - %H.%M.%S`,
+        which is found at the end of all ShadowPlay clip names. '''
+    try:
+        parts = basename(path).split()
+        parts[-1] = '.'.join(parts[-1].split('.')[:-3])
+
+        date_string = ' '.join(parts[-3:])
+        date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
+        game = ' '.join(parts[:-3])
+        if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
+
+        renamed_base_no_ext = RENAME_FORMAT.replace('?game', game).replace('?date', date.strftime(RENAME_DATE_FORMAT))
+        renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
+        renamed_path = renamed_path_no_ext + '.mp4'
+
+        count_detected = '?count' in renamed_path_no_ext
+        protected_paths = cutter.protected_paths    # this is exactly what i want to avoid but i'm leaving it for now
+        if count_detected or exists(renamed_path) or renamed_path in protected_paths:
+            count = RENAME_COUNT_START_NUMBER
+            if not count_detected:                  # if forced to add number, use windows-style count: start from (2)
+                count = 2
+                renamed_path_no_ext += ' (?count)'
+            while True:
+                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS + (1 if count >= 0 else 2))
+                renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
+                if not exists(renamed_path) and renamed_path not in protected_paths: break
+                count += 1
+
+        renamed_base = basename(renamed_path)
+        logging.info(f'Renaming video to: {renamed_base}')
+        rename(path, renamed_path)                  # super-rename not needed
+        logging.info('Rename successful.')
+        return abspath(renamed_path), renamed_base  # use abspath to ensure consistent path formatting later on
+    except Exception as error:
+        logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
+        return path, basename(path)
+
+
+def play_alert(sound: str) -> None:
+    ''' Plays a system-wide audio alert. `sound` is the filename of a WAV
+        file located within `RESOURCE_FOLDER`. Plays a generic OS alert if
+        `sound` doesn't exist, or a generic OS error sound if `sound` is
+        "error" and "error.wav" doesn't exist. '''
+    if not AUDIO: return
+    path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
+    logging.info('Playing alert: ' + path)
+
+    if exists(path):
+        try: winsound.PlaySound(path, winsound.SND_ASYNC)
+        except:
+            winsound.MessageBeep(winsound.MB_ICONHAND)      # play OS error sound
+            logging.error(f'(!) Error while playing alert {path}: {format_exc()}')
+    else:       # generic OS alert for missing file, OS error for actual errors
+        if sound == 'error': winsound.MessageBeep(winsound.MB_ICONHAND)
+        else: winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        logging.warning('(!) Alert doesn\'t exist at path ' + path)
+
+
+def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
+    ''' Returns a precise duration for the video at `path`.
+        Returns 0 if `path` is corrupt or an invalid format. '''
+    for track in pymediainfo.MediaInfo.parse(path).tracks:
+        if track.track_type == "Video":
+            return track.duration / 1000
+    return 0
+
+
+def verify_ffmpeg() -> None:
+    ''' Checks if FFmpeg exists. If it isn't in the script's folder,
+        the user's PATH system variable is checked. If still not found,
+        a message box is displayed and the script exits. '''
+    if exists('ffmpeg.exe'): return
+    else:
+        for path in os.environ.get('PATH', '').split(';'):
+            try:
+                if 'ffmpeg.exe' in listdir(path):
+                    return
+            except: pass
+
+    msg = ("FFmpeg was not detected. FFmpeg is required for all of this "
+           "program's editing features. Please ensure `ffmpeg.exe` is "
+           "either in your PATH or in this program's install folder.\n\n"
+           "You can download FFmpeg for Windows here (not clickable, sorry): "
+           "https://www.gyan.dev/ffmpeg/builds/")
+    MessageBox = ctypes.windll.user32.MessageBoxW   # flags are warning symbol + stay on top
+    MessageBox(None, msg, 'Instant Replay Suite — FFmpeg not detected', 0x00040010)
+    raise FileNotFoundError('''\n\n---\n
+FFmpeg was not detected. FFmpeg is required for all of Instant Replay Suite's editing features.
+
+Please ensure `ffmpeg.exe` is either in your PATH or in this program's install folder.
+You can download FFmpeg for Windows from here: https://www.gyan.dev/ffmpeg/builds/\n\n---''')
+
+
+
 # -------------------------
 # Reading custom tray menu
 # -------------------------
@@ -527,140 +646,6 @@ if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
     exit(17)
 
 if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
-
-
-# ---------------------
-# Utility functions
-# ---------------------
-#get_memory = lambda: psutil.Process().memory_info().rss / (1024 * 1024)
-get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
-
-def verify_ffmpeg():
-    ''' Checks if FFmpeg exists. If it isn't in the script's folder,
-        the user's PATH system variable is checked. If still not found,
-        a message box is displayed and the script exits. '''
-    if exists('ffmpeg.exe'): return
-    else:
-        for path in os.environ.get('PATH', '').split(';'):
-            try:
-                if 'ffmpeg.exe' in listdir(path):
-                    return
-            except: pass
-
-    msg = ("FFmpeg was not detected. FFmpeg is required for all of this "
-           "program's editing features. Please ensure `ffmpeg.exe` is "
-           "either in your PATH or in this program's install folder.\n\n"
-           "You can download FFmpeg for Windows here (not clickable, sorry): "
-           "https://www.gyan.dev/ffmpeg/builds/")
-    MessageBox = ctypes.windll.user32.MessageBoxW   # flags are warning symbol + stay on top
-    MessageBox(None, msg, 'Instant Replay Suite — FFmpeg not detected', 0x00040010)
-    raise FileNotFoundError('''\n\n---\n
-FFmpeg was not detected. FFmpeg is required for all of Instant Replay Suite's editing features.
-
-Please ensure `ffmpeg.exe` is either in your PATH or in this program's install folder.
-You can download FFmpeg for Windows from here: https://www.gyan.dev/ffmpeg/builds/\n\n---''')
-
-
-def quit_tray(icon):
-    ''' Quits pystray `icon`, saves history,
-        does final cleanup, and exits script. '''
-    logging.info('Closing system tray icon and exiting suite.')
-    icon.visible = False
-    icon.stop()
-    tracemalloc.stop()
-
-    logging.info(f'Clip history: {cutter.last_clips}')
-    with open(HISTORY_PATH, 'w') as history:
-        history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
-
-    try: sys.exit(0)
-    except SystemExit: pass         # avoid harmless yet annoying SystemExit error
-
-
-def delete(path: str):
-    ''' Robustly deletes a given `path`. '''
-    logging.info('Deleting: ' + path)
-    try:
-        if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
-        else: remove(path)
-    except:
-        logging.error(f'(!) Error while deleting file {path}: {format_exc()}')
-        play_alert('error')
-
-
-def renames(old: str, new: str):
-    ''' `os.py`'s super-rename, but without deleting empty directories. '''
-    head, tail = splitpath(new)
-    if head and tail and not exists(head): makedirs(head)
-    rename(old, new)
-
-
-def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FORMAT):
-    ''' Renames clip at `path` according to `name_format` and `date_format`
-        assuming the clip already uses ShadowPlay's default formatting. '''
-    try:
-        parts = basename(path).split()
-        parts[-1] = '.'.join(parts[-1].split('.')[:-3])
-
-        date_string = ' '.join(parts[-3:])
-        date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
-        game = ' '.join(parts[:-3])
-        if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
-
-        renamed_base_no_ext = name_format.replace('?game', game).replace('?date', date.strftime(date_format))
-        renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
-        renamed_path = renamed_path_no_ext + '.mp4'
-
-        count_detected = '?count' in renamed_path_no_ext
-        protected_paths = cutter.protected_paths    # this is exactly what i want to avoid but i'm leaving it for now
-        if count_detected or exists(renamed_path) or renamed_path in protected_paths:
-            count = RENAME_COUNT_START_NUMBER
-            if not count_detected:                  # if forced to add number, use windows-style count: start from (2)
-                count = 2
-                renamed_path_no_ext += ' (?count)'
-            while True:
-                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
-                renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
-                if not exists(renamed_path) and renamed_path not in protected_paths: break
-                count += 1
-
-        renamed_base = basename(renamed_path)
-        logging.info(f'Renaming video to: {renamed_base}')
-        rename(path, renamed_path)                  # super-rename not needed
-        logging.info('Rename successful.')
-        return abspath(renamed_path), renamed_base  # use abspath to ensure consistent path formatting later on
-    except Exception as error:
-        logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
-        return path, basename(path)
-
-
-def play_alert(sound: str):
-    ''' Plays a system-wide audio alert. `sound` is the filename of a WAV
-        file located within `RESOURCE_FOLDER`. Plays a generic OS alert if
-        `sound` doesn't exist, or a generic OS error sound if `sound` is
-        "error" and "error.wav" doesn't exist. '''
-    if not AUDIO: return
-    path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
-    logging.info('Playing alert: ' + path)
-
-    if exists(path):
-        try: winsound.PlaySound(path, winsound.SND_ASYNC)
-        except:
-            winsound.MessageBeep(winsound.MB_ICONHAND)      # play OS error sound
-            logging.error(f'(!) Error while playing alert {path}: {format_exc()}')
-    else:       # generic OS alert for missing file, OS error for actual errors
-        if sound == 'error': winsound.MessageBeep(winsound.MB_ICONHAND)
-        else: winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-        logging.warning('(!) Alert doesn\'t exist at path ' + path)
-
-
-def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
-    ''' Returns a precise duration for the video at `path`.
-        Returns 0 if `path` is corrupt or an invalid format. '''
-    for track in pymediainfo.MediaInfo.parse(path).tracks:
-        if track.track_type == "Video":
-            return track.duration / 1000
-    return 0
 
 
 # ---------------------
@@ -1425,6 +1410,22 @@ if __name__ == '__main__':
         # ---------------------
         # Tray-icon functions
         # ---------------------
+        def quit_tray(icon):
+            ''' Quits pystray `icon`, saves history,
+                does final cleanup, and exits script. '''
+            logging.info('Closing system tray icon and exiting suite.')
+            icon.visible = False
+            icon.stop()
+            tracemalloc.stop()
+
+            logging.info(f'Clip history: {cutter.last_clips}')
+            with open(HISTORY_PATH, 'w') as history:
+                history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
+
+            try: sys.exit(0)
+            except SystemExit: pass         # avoid harmless yet annoying SystemExit error
+
+
         def get_clip_tray_title(index: int, default: str = TRAY_RECENT_CLIP_DEFAULT_TEXT) -> str:
             ''' Returns the title of a recent clip item by its `index`.
                 If no clip exists at that index, `default` is returned.
