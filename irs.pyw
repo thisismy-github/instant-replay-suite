@@ -19,6 +19,7 @@ import pymediainfo                  # 3.75mb  / 17.1mb      https://stackoverflo
 from PIL import Image               # 2.13mb  / 15.48mb
 from pystray._util import win32
 from win32_setctime import setctime
+from configparsebetter import ConfigParseBetter
 
 # Starts with roughly ~36.7mb of memory usage. Roughly 9.78mb combined from imports alone, without psutil and cv2/pymediainfo (9.63mb w/o tracemalloc).
 tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
@@ -45,67 +46,127 @@ TODO pystray subclass improvements
 # ---------------------
 # Settings
 # ---------------------
-AUDIO = True
-RENAME = True
-RENAME_FORMAT = '?game ?date #?count'
-RENAME_DATE_FORMAT = '%y.%m.%d'     # https://strftime.org/
-RENAME_COUNT_START_NUMBER = 1
-RENAME_COUNT_PADDED_ZEROS = 0
+CWD = os.path.dirname(os.path.realpath(__file__))
+os.chdir(CWD)
+CONFIG_PATH = os.path.join(CWD, 'config.settings.ini')
 
-CHECK_FOR_NEW_CLIPS_ON_LAUNCH = True
-SEND_DELETED_FILES_TO_RECYCLE_BIN = True
-MAX_BACKUPS = 5
-
-
-# --- Paths ---
-LOG_PATH = None
-BACKUP_FOLDER = 'Backups'
-RESOURCE_FOLDER = 'resources'
-HISTORY_PATH = 'history.txt'
-UNDO_LIST_PATH = 'undo.txt'
-ICON_PATH = 'icon.ico'
-
-# NOTE: These only apply if the associated path above is not absolute.
-SAVE_LOG_FILE_TO_APPDATA_FOLDER = False
-SAVE_HISTORY_TO_APPDATA_FOLDER = False
-SAVE_UNDO_LIST_TO_APPDATA_FOLDER = False
-SAVE_BACKUPS_TO_APPDATA_FOLDER = False
-SAVE_BACKUPS_TO_VIDEO_FOLDER = False
-
-# NOTE: Subfolders only, i.e. ['Other', 'Movies']. Not case-sensitive.
-IGNORE_VIDEOS_IN_THESE_FOLDERS = []
-
+cfg = ConfigParseBetter(
+    CONFIG_PATH,
+    caseSensitive=True,
+    autosaveOnlyWhenFileDoesNotExist=True,
+    comment_prefixes=('//',)
+)
 
 # --- Hotkeys ---
-CONCATENATE_HOTKEY = 'alt + c'
-DELETE_HOTKEY = 'ctrl + alt + d'
-UNDO_HOTKEY = 'alt + u'
-LENGTH_HOTKEY = 'alt'
-LENGTH_DICTIONARY = {
-    '1': 10,
-    '2': 20,
-    '3': 30,
-    '4': 40,
-    '5': 50,
-    '6': 60,
-    '7': 70,
-    '8': 80,
-    '9': 90
-}
+cfg.setSection(' --- Trim Hotkeys --- ')
+cfg.comment('Usage: <hotkey> = <trim length>')
+LENGTH_DICTIONARY = {key: length for key, length in cfg.loadAllFromSection()}
+if not LENGTH_DICTIONARY:
+    LENGTH_DICTIONARY = {
+        'alt + 1': 10,
+        'alt + 2': 20,
+        'alt + 3': 30,
+        'alt + 4': 40,
+        'alt + 5': 50,
+        'alt + 6': 60,
+        'alt + 7': 70,
+        'alt + 8': 80,
+        'alt + 9': 90
+    }
+    for name, alias in LENGTH_DICTIONARY.items():
+        cfg.load(name, alias)
 
+cfg.setSection(' --- Other Hotkeys --- ')
+CONCATENATE_HOTKEY = cfg.load('CONCATENATE', 'alt + c')
+UNDO_HOTKEY = cfg.load('UNDO', 'alt + u')
+DELETE_HOTKEY = cfg.load('DELETE', 'ctrl + alt + d')
 
-'''             --- CUSTOM TRAY MENU TUTORIAL ---
-`TRAY_ADVANCED_MODE_MENU` defines the custom tray you wish to use. It's a list
-(or tuple) of items. Items may be strings which directly insert an item into
-the menu, or a single-key dictionary with a custom name as the key (string),
-and the item you wish to insert and rename as the value (string). A dictionary
-with a list as the value will become a submenu, with the key being the title.
-Submenus work just like the base menu, and can be nested indefinitely.
+# --- Misc settings ---
+cfg.setSection(' --- General --- ')
+AUDIO = cfg.load('AUDIO', True)
+CHECK_FOR_NEW_CLIPS_ON_LAUNCH = cfg.load('CHECK_FOR_NEW_CLIPS_ON_LAUNCH', True)
+SEND_DELETED_FILES_TO_RECYCLE_BIN = cfg.load('SEND_DELETED_FILES_TO_RECYCLE_BIN', True)
+MAX_BACKUPS = cfg.load('MAX_BACKUPS', 10)
 
-`TRAY_LEFT_CLICK_ACTION` and `TRAY_MIDDLE_CLICK_ACTION` define
-a single normal tray item to activate upon that specific click.
+# --- Rename formatting ---
+cfg.setSection(' --- Renaming Clips --- ')
+cfg.comment('''NAME_FORMAT variables:
+    ?game - The game being played. The game's name will be swapped
+            for an available alias if `USE_GAME_ALIASES` is True.
+    ?date - The clip's timestamp. The timestamp's format is specified by
+            DATE_FORMAT - see https://strftime.org/ for date formatting.
+    ?count - A count given to create unique clip names. Only increments
+             when the clip's name already exists. Best used when ?date
+             is absent or isn't very specific (by default, DATE_FORMAT
+             only saves the day, not the exact time of a clip).''')
+RENAME = cfg.load('AUTO_RENAME_CLIPS', True)
+USE_GAME_ALIASES = cfg.load('USE_GAME_ALIASES', True)
+RENAME_FORMAT = cfg.load('NAME_FORMAT', '?game ?date #?count')
+RENAME_DATE_FORMAT = cfg.load('DATE_FORMAT', '%y.%m.%d')
+RENAME_COUNT_START_NUMBER = cfg.load('COUNT_START_NUMBER', 1)
+RENAME_COUNT_PADDED_ZEROS = cfg.load('COUNT_PADDED_ZEROS', 1)
 
-Normal tray items:
+# --- Game aliases ---
+cfg.setSection(' --- Game Aliases --- ')
+cfg.comment('''This section defines aliases to use for ?game in `NAME_FORMAT` for renaming
+clips. Not case-sensitive. || Usage: <ShadowPlay\'s name> = <custom name>''')
+if USE_GAME_ALIASES:    # lowercase and remove double-spaces from names
+    GAME_ALIASES = {' '.join(name.lower().split()): alias for name, alias in cfg.loadAllFromSection()}
+    if not GAME_ALIASES:
+        GAME_ALIASES = {
+            "Left 4 Dead": "L4D1",
+            "Left 4 Dead 2": "L4D2",
+            "Battlefield 4": "BF4",
+            "Dead by Daylight": "DBD",
+            "Counter-Strike Global Offensive": "CSGO",
+            "The Binding of Isaac Rebirth": "TBOI",
+            "Team Fortress 2": "TF2",
+            "Tom Clancy's Rainbow Six Siege": "R6"
+        }
+        for name, alias in GAME_ALIASES.items():
+            cfg.load(name, alias)
+else: GAME_ALIASES = {}
+
+# --- Paths ---
+cfg.setSection(' --- Paths --- ')
+BACKUP_FOLDER = cfg.load('BACKUP_FOLDER', 'Backups')
+RESOURCE_FOLDER = cfg.load('RESOURCE_FOLDER', 'resources')
+HISTORY_PATH = cfg.load('HISTORY', 'history.txt')
+UNDO_LIST_PATH = cfg.load('UNDO_LIST', 'undo.txt')
+ICON_PATH = cfg.load('ICON', 'icon.ico')
+
+cfg.setSection(' --- Special Folders --- ')
+cfg.comment('''These only apply if the associated path
+in [Paths] is not an absolute path.''')
+SAVE_HISTORY_TO_APPDATA_FOLDER = cfg.load('SAVE_HISTORY_TO_APPDATA_FOLDER', False)
+SAVE_UNDO_LIST_TO_APPDATA_FOLDER = cfg.load('SAVE_UNDO_LIST_TO_APPDATA_FOLDER', False)
+SAVE_BACKUPS_TO_APPDATA_FOLDER = cfg.load('SAVE_BACKUPS_TO_APPDATA_FOLDER', False)
+SAVE_BACKUPS_TO_VIDEO_FOLDER = cfg.load('SAVE_BACKUPS_TO_VIDEO_FOLDER', False)
+
+cfg.setSection(' --- Ignored Folders --- ')
+cfg.comment('''Subfolders in the video folder that will be ignored during scans.
+Names must be enclosed in quotes and comma-separated. Base names
+only, i.e. '"Other", "Movies"'. Not case-sensitive.''')
+lines = cfg.load('IGNORED_FOLDERS').split(',')
+cleaned = (folder.strip().strip('"').strip().lower() for folder in lines)
+IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(folder for folder in cleaned if folder)
+del lines
+del cleaned
+
+# --- Tray menu ---
+cfg.setSection(' --- Tray Menu --- ')
+cfg.comment(f'''If `USE_CUSTOM_MENU` is True, {basename(CUSTOM_MENU_PATH)} is used to
+create a custom menu. See {basename(CUSTOM_MENU_PATH)} for more information.
+If deleted, set this to True and restart Instant Replay Suite.''')
+TRAY_ADVANCED_MODE = cfg.load('USE_CUSTOM_MENU', True)
+
+# --- Basic mode (TRAY_ADVANCED_MODE = False) only ---
+cfg.comment('Only used if `USE_CUSTOM_MENU` is False:', before='\n')
+TRAY_SHOW_QUICK_ACTIONS = cfg.load('SHOW_QUICK_ACTIONS', True)
+TRAY_RECENT_CLIPS_IN_SUBMENU = cfg.load('PUT_RECENT_CLIPS_IN_SUBMENU', False)
+TRAY_QUICK_ACTIONS_IN_SUBMENU = cfg.load('PUT_QUICK_ACTIONS_IN_SUBMENU', True)
+
+cfg.comment('''Valid left-click and middle-click actions:
     'open_log':             Opens this program's log file.
     'open_video_folder':    Opens the currently defined "Videos" folder.
     'open_install_folder':  Opens this program's root folder.
@@ -116,100 +177,48 @@ Normal tray items:
     'concatenate_last_two': Concatenates your two most recent clips.
     'undo':                 Undoes the last trim or concatenation.
     'clear_history':        Clears your clip history.
-    'update':               Manually checks for new clips and refreshes existing ones.
-    'quit':                 Exits this program.
-
-Special tray items:
-    'separator':            Adds a separator in the menu.
-                                -Cannot be renamed.
-    'memory':               Displays current RAM usage.
-                                -This is somewhat misleading and not worth using.
-                                -Use '?memory' in the title to represent where the number will be:
-                                    {'RAM: ?memory': 'memory'}
-                                -This item will be greyed out and is informational only.
-    'recent_clips':         Displays your most recent clips.
-                                -Cannot be renamed.
-                                -Renaming this item will simply place it within a submenu:
-                                    {'Recent clips': 'recent_clips'}
-                                -See "Recent clip menu settings" below for lots of customization.
-
----
-
-Submenu example:
-    {'Quick actions': [
-        {'Play most recent clip': 'play_most_recent'},
-        {'View last clip in explorer': 'explore_most_recent'},
-        {'Concatenate last two clips': 'concatenate_last_two'},
-        {'Delete most recent clip': 'delete_most_recent'},
-    ]}
-'''
-
-TRAY_LEFT_CLICK_ACTION = 'open_video_folder'
-TRAY_MIDDLE_CLICK_ACTION = 'play_most_recent'
-TRAY_ADVANCED_MODE = True
-TRAY_ADVANCED_MODE_MENU = (
-    {'View log': 'open_log'},
-    {'View videos': 'open_video_folder'},
-    {'View root': 'open_install_folder'},
-    {'View backups': 'open_backup_folder'},
-    'separator',
-    {'Play last clip': 'play_most_recent'},
-    {'Explore last clip': 'explore_most_recent'},
-    {'Splice last clips': 'concatenate_last_two'},
-    {'Delete last clip': 'delete_most_recent'},
-    {'Undo last action': 'undo'},
-    'separator',
-    'recent_clips',
-    'separator',
-    {'Update clips': 'update'},
-    {'Clear history': 'clear_history'},
-    {'Exit': 'quit'},
-)
-
-
-# --- Basic mode (TRAY_ADVANCED_MODE = False) only ---
-TRAY_SHOW_QUICK_ACTIONS = True
-TRAY_RECENT_CLIPS_IN_SUBMENU = False
-TRAY_QUICK_ACTIONS_IN_SUBMENU = True
-
+    'update':               Manually checks for new clips/refreshes existing ones.
+    'quit':                 Exits this program.''', before='\n')
+TRAY_LEFT_CLICK_ACTION = cfg.load('LEFT_CLICK_ACTION', 'open_video_folder')
+TRAY_MIDDLE_CLICK_ACTION = cfg.load('MIDDLE_CLICK_ACTION', 'play_most_recent')
 
 # --- Recent clip menu settings ---
-TRAY_RECENT_CLIP_COUNT = 5
-TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = True
-TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO = True    # TODO have auto_update turn on or off based on these settings
-TRAY_EXTRA_INFO_DATE_FORMAT = '%a %#D %#I:%M:%S%p'
-TRAY_CLIPS_PLAY_ON_CLICK = True
-
-''' ?date - "1/17/22 12:09am" (see TRAY_RECENT_CLIP_DATE_FORMAT)
-    ?recency - "2 days ago"
+cfg.setSection(' --- Tray Menu Recent Clips --- ')
+cfg.comment('''MAX_RECENT_CLIPS             - Total number of recent clips to display in the menu
+                                (NOT the total number of clips saved in general).
+PLAY_RECENT_CLIPS_ON_CLICK   - Play clips on click instead of opening them in explorer.
+                                Only used if `EACH_RECENT_CLIP_HAS_SUBMENU` is False.
+EACH_RECENT_CLIP_HAS_SUBMENU - If True, each clip will have a dedicated
+                                submenu full of editing actions.
+SUBMENUS_DISPLAY_EXTRA_INFO  - If True, a separator and two extra lines of info
+                                will appear at the bottom of each clip's submenu.
+                                Only used if `EACH_RECENT_CLIP_HAS_SUBMENU` is True.
+EXTRA_INFO_DATE_FORMAT       - The date format used if `SUBMENUS_DISPLAY_EXTRA_INFO`
+                                is True. See https://strftime.org/ for date formatting.''')
+TRAY_RECENT_CLIP_COUNT = cfg.load('MAX_RECENT_CLIPS', 10)
+TRAY_CLIPS_PLAY_ON_CLICK = cfg.load('PLAY_RECENT_CLIPS_ON_CLICK', True)
+TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = cfg.load('EACH_RECENT_CLIP_HAS_SUBMENU', True)
+TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO = cfg.load('SUBMENUS_DISPLAY_EXTRA_INFO', True)
+TRAY_EXTRA_INFO_DATE_FORMAT = cfg.load('EXTRA_INFO_DATE_FORMAT', '%a %#D %#I:%M:%S%p')
+cfg.comment('''RECENT_CLIP_NAME_FORMAT variables:
+    ?date         - "1/17/22 12:09am" (see https://strftime.org/ for date formatting)
+    ?recency      - "2 days ago"
     ?recencyshort - "2d"
-    ?size - "244.1mb"
-    ?length - "1:30" <- 90 seconds
-    ?clip - Name of a clip only.
-    ?clipdir - Name and immediate parent directory only.
-    ?clippath - Full path to a clip. '''
-TRAY_RECENT_CLIP_NAME_FORMAT = '(?recencyshort) - ?clip'
-TRAY_RECENT_CLIP_DATE_FORMAT = '%#I:%M%p'
-TRAY_RECENT_CLIP_DEFAULT_TEXT = ' --'
-
-
-# --- Game aliases ---
-GAME_ALIASES = {    # NOTE: the game titles must be lowercase and have no double-spaces
-    "left 4 dead": "L4D1",
-    "left 4 dead 2": "L4D2",
-    "battlefield 4": "BF4",
-    "dead by daylight": "DBD",
-    "counter-strike global offensive": "CSGO",
-    "the binding of isaac rebirth": "TBOI",
-    "team fortress 2": "TF2",
-    "tom clancy's rainbow six siege": "R6"
-}
-
+    ?size         - "244.1mb"
+    ?length       - "1:30" <- 90 seconds
+    ?clip         - Name of a clip only.
+    ?clipdir      - Name and immediate parent directory only.
+    ?clippath     - Full path to a clip.''', before='\n')
+TRAY_RECENT_CLIP_NAME_FORMAT = cfg.load('RECENT_CLIP_NAME_FORMAT', '(?recencyshort) - ?clip')
+TRAY_RECENT_CLIP_DATE_FORMAT = cfg.load('RECENT_CLIP_DATE_FORMAT', '%#I:%M%p')
+TRAY_RECENT_CLIP_DEFAULT_TEXT = cfg.load('EMPTY_SLOT_TEXT', ' --')
 
 # --- Registry setting overrides ---
-VIDEO_FOLDER_OVERRIDE = ''
-INSTANT_REPLAY_HOTKEY_OVERRIDE = ''
-TRAY_ALIGN_CENTER = False
+cfg.setSection(' --- Registry Overrides --- ')
+cfg.comment('Used for overriding values obtained from the registry.')
+VIDEO_FOLDER_OVERRIDE = cfg.load('VIDEO_FOLDER_OVERRIDE')
+INSTANT_REPLAY_HOTKEY_OVERRIDE = cfg.load('INSTANT_REPLAY_HOTKEY_OVERRIDE')
+TRAY_ALIGN_CENTER = cfg.load('ALWAYS_CENTER_ALIGN_TRAY_MENU_ON_OPEN', False)
 
 
 # ---------------------
@@ -234,9 +243,6 @@ remove = os.remove
 # ---------------------
 # Constants & paths
 # ---------------------
-CWD = dirname(os.path.realpath(__file__))
-os.chdir(CWD)
-
 APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
 RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
 
@@ -246,18 +252,10 @@ if os.path.splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 if os.path.splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
 else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
-if not LOG_PATH: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
-if os.path.splitdrive(LOG_PATH)[0]: LOG_PATH = abspath(LOG_PATH)
-else: LOG_PATH = pjoin(APPDATA_FOLDER if SAVE_LOG_FILE_TO_APPDATA_FOLDER else CWD, LOG_PATH)
 
 assert exists(ICON_PATH), f'No icon exists at {ICON_PATH}!'
 if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
 if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
-if not exists(dirname(LOG_PATH)): makedirs(dirname(LOG_PATH))
-
-if isinstance(IGNORE_VIDEOS_IN_THESE_FOLDERS, str): IGNORE_VIDEOS_IN_THESE_FOLDERS = (IGNORE_VIDEOS_IN_THESE_FOLDERS,)
-IGNORE_VIDEOS_IN_THESE_FOLDERS = tuple(path.strip().lower() for path in IGNORE_VIDEOS_IN_THESE_FOLDERS)
-
 # `CLIP_BUFFER` is how many recent clips should be `Clip` objects instead of just strings
 # every clip in the menu + the first one outside the menu should be a `Clip` object
 CLIP_BUFFER = max(2, TRAY_RECENT_CLIP_COUNT) + 1
@@ -455,7 +453,7 @@ def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FO
                 count = 2
                 renamed_path_no_ext += ' (?count)'
             while True:
-                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS + (1 if count >= 0 else 2))
+                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
                 renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
                 if not exists(renamed_path) and renamed_path not in protected_paths: break
                 count += 1
@@ -736,7 +734,7 @@ class AutoCutter:
         keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
         keyboard.add_hotkey(UNDO_HOTKEY, self.undo)
         for key, length in LENGTH_DICTIONARY.items():
-            keyboard.add_hotkey(f'{LENGTH_HOTKEY} + {key}', self.trim_clip, args=(length,))
+            keyboard.add_hotkey(key, self.trim_clip, args=(length,))
         logging.info(f'Auto-cutter initialized in {time.time() - start:.2f} seconds.')
 
     # ---------------------
@@ -1460,10 +1458,10 @@ if __name__ == '__main__':
         del INSTANT_REPLAY_HOTKEY
         del CONCATENATE_HOTKEY
         del DELETE_HOTKEY
-        del LENGTH_HOTKEY
         del TRAY_ACTIONS
         del TRAY_LEFT_CLICK_ACTION
         del TRAY_MIDDLE_CLICK_ACTION
+        del CONFIG_PATH
 
         # final garbage collection to reduce memory usage
         gc.collect(generation=2)
