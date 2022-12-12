@@ -3,6 +3,7 @@ from __future__ import annotations  # 0.10mb  / 13.45       https://stackoverflo
 import gc                           # 0.275mb / 13.625mb    <- Heavy, but probably worth it
 import os                           # 0.10mb  / 13.45mb
 import sys                          # 0.125mb / 13.475mb
+import json
 import time                         # 0.125mb / 13.475mb
 import ctypes
 import logging                      # 0.65mb  / 14.00mb
@@ -49,6 +50,7 @@ TODO pystray subclass improvements
 CWD = os.path.dirname(os.path.realpath(__file__))
 os.chdir(CWD)
 CONFIG_PATH = os.path.join(CWD, 'config.settings.ini')
+CUSTOM_MENU_PATH = os.path.join(CWD, 'config.menu.ini')
 
 cfg = ConfigParseBetter(
     CONFIG_PATH,
@@ -335,6 +337,131 @@ else:
         else: MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
     except: logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
 logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
+
+
+# -------------------------
+# Reading custom tray menu
+# -------------------------
+def load_menu(path, comment_prefix='//'):
+    ''' Reads a JSON file at `path`, but fixes common errors users may
+        make, while allowing comments and value-only lines. Lines with
+        `comment_prefix` are ignored. Designed for reading JSON files
+        that are meant to be edited by users. '''
+    with open(path, 'r') as file:
+        striped = (line.strip() for line in file.readlines())
+        raw_json_lines = (line for line in striped if line and line[:2] != comment_prefix)
+
+    json_lines = []
+    for line in raw_json_lines:
+        # allow value-only lines
+        if ':' not in line and line not in ('{', '}', '},'):
+            line = '"": ' + line
+
+        # ensure all nested dictionaries have exactly one trailing comma
+        line = line.replace('}', '},')
+        while ' ,' in line: line = line.replace(' ,', ',')
+        while '},,' in line: line = line.replace('},,', '},')
+        json_lines.append(line)
+
+    # ensure final bracket exists and does not have a trailing comma
+    json_string = '\n'.join(json_lines).rstrip().rstrip(',').rstrip('}') + '}'
+
+    # remove trailing comma from final element of every dictionary
+    comma_index = json_string.find(',')     # string ends with }, so we'll...
+    bracket_index = json_string.find('}')   # ...run out of commas first
+    while comma_index != -1:
+        next_comma_index = json_string.find(',', comma_index + 1)
+        if next_comma_index > bracket_index or next_comma_index == -1:
+            quote_index = json_string.find('"', comma_index)
+            if quote_index > bracket_index or quote_index == -1:
+                start = json_string[:comma_index]
+                end = json_string[comma_index + 1:]
+                json_string = start + end
+            bracket_index = json_string.find('}', bracket_index + 1)
+        comma_index = next_comma_index
+
+    # our `object_pairs_hook` immediately returns the raw list of pairs
+    # instead of creating a dictionary, allowing us to use duplicate keys
+    return json.loads(json_string, object_pairs_hook=lambda pairs: pairs)
+
+
+def restore_menu_file():
+    ''' Creates a fresh menu file at `CUSTOM_MENU_PATH`. '''
+    logging.info(f'Creating fresh menu file at {CUSTOM_MENU_PATH}...')
+    with open(CUSTOM_MENU_PATH, 'w') as file:
+        file.write('''//                     --- CUSTOM TRAY MENU TUTORIAL ---
+//
+// This file defines a custom menu dictionary for your tray icon. It's JSON format,
+// with some leeway in the formatting. Each item consists of a name-action pair,
+// and actions may be named however you please. To create a submenu, add a nested
+// dictionary as an action (see example below). Submenus work just like the base
+// menu, and can be nested indefinitely. Actions without names will still be parsed,
+// and will default to a blank name (see "Special tray actions" for exceptions).
+//
+// Normal tray actions:
+//    "open_log":             Opens this program's log file.
+//    "open_video_folder":    Opens the currently defined "Videos" folder.
+//    "open_install_folder":  Opens this program's root folder.
+//    "open_backup_folder":   Opens the currently defined backup folder.
+//    "play_most_recent":     Plays your most recent clip.
+//    "explore_most_recent":  Opens your most recent clip in Explorer.
+//    "delete_most_recent":   Deletes your most recent clip.
+//    "concatenate_last_two": Concatenates your two most recent clips.
+//    "undo":                 Undoes the last trim or concatenation.
+//    "clear_history":        Clears your clip history.
+//    "update":               Manually checks for new clips and refreshes existing ones.
+//    "quit":                 Exits this program.
+//
+// Special tray actions:
+//    "separator":            Adds a separator in the menu.
+//                                - Cannot be named.
+//                                    ("separator") OR ("": "separator")
+//    "recent_clips":         Displays your most recent clips.
+//                                - Naming this item will place it within a submenu:
+//                                    ("Recent clips": "recent_clips")
+//                                - Not naming this item will display all clips in the base menu:
+//                                    ("recent_clips") OR ("": "recent_clips")
+//    "memory":               Displays current RAM usage.
+//                                - This is somewhat misleading and not worth using.
+//                                - Use "?memory" in the title to represent where the number will be:
+//                                    ("RAM: ?memory": "memory")
+//                                - Not naming this item will default to "Memory usage: ?memorymb":
+//                                    ("memory") OR ("": "memory")
+//                                - This item will be greyed out and is informational only.
+//
+// Submenu example:
+//    {
+//        "Quick actions": {
+//            "Play most recent clip": "play_most_recent",
+//            "View last clip in explorer": "explore_most_recent",
+//            "Concatenate last two clips": "concatenate_last_two",
+//            "Delete most recent clip": "delete_most_recent"
+//        },
+//    }
+// ---------------------------------------------------------------------------
+
+{
+\t"Open...": {
+\t\t"Open root": "open_install_folder",
+\t\t"Open videos": "open_video_folder",
+\t\t"Open backups": "open_backup_folder",
+\t},
+\t"View log": "open_log",
+\t"separator",
+\t"Play last clip": "play_most_recent",
+\t"Explore last clip": "explore_most_recent",
+\t"Undo last action": "undo",
+\t"separator",
+\t"recent_clips",
+\t"separator",
+\t"Update clips": "update",
+\t"Clear history": "clear_history",
+\t"Exit": "quit",
+}''')
+
+
+if not TRAY_ADVANCED_MODE: TRAY_ADVANCED_MODE_MENU = None
+else: TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
 
 
 # ---------------------
@@ -1368,42 +1495,43 @@ if __name__ == '__main__':
 
         # creating menu -- advanced mode
         if TRAY_ADVANCED_MODE:
-            exit_item_exists = False            # variable for making sure an exit item is included
-            def evaluate_menu(items, menu):     # function for recursively solving menus/submenus and exporting them to a list
+            exit_item_exists = False                # variable for making sure an exit item is included
+            def evaluate_menu(item_pairs, menu):    # function for recursively solving menus/submenus and exporting them to a list
                 global exit_item_exists
-                for item_dict in items:
-                    assert not isinstance(item_dict, set), (f'Tray item {item_dict} is improperly written.\n\n'
-                                                            'Usage: {"title of item": "action_of_item"}\n       '
-                                                            'OR\n       {"title of submenu": {nested_menu}}\n\n'
-                                                            'Note the colon (:) between the title and it\'s action.')
-                    if isinstance(item_dict, str):
-                        item = item_dict.strip().lower()
-                        if item == 'separator': menu.append(SEPARATOR)
-                        elif item == 'recent_clips': menu.extend(RECENT_CLIPS_BASE)
-                        elif item == 'memory': menu.append(pystray.MenuItem(lambda _: f'Memory usage: {get_memory():.2f}mb', None, enabled=False))
-                        continue
+                for name, action in item_pairs:
+                    try:
+                        action = action.strip().lower()
 
-                    for name, action in item_dict.items():
-                        try:                            # create and append menu item
-                            action = action.strip().lower()
-                            if action == 'quit': exit_item_exists = True    # mark that an exit item is in the menu
-                            elif action == 'memory':    # get_mem_title -> workaround for python bug/oddity involving creating lambdas in iterables
+                        # special actions
+                        if action == 'separator':
+                            menu.append(SEPARATOR)
+                            continue
+                        elif action == 'recent_clips':
+                            if not name.strip(): menu.extend(RECENT_CLIPS_BASE)
+                            else: menu.append(pystray.MenuItem(name, pystray.Menu(*RECENT_CLIPS_BASE)))
+                            continue
+                        elif action == 'memory':
+                            if name:                # get_mem_title -> workaround for python bug/oddity involving creating lambdas in iterables
                                 get_mem_title = lambda name: lambda _: name.replace('?memory', f'{get_memory():.2f}mb')
                                 menu.append(pystray.MenuItem(get_mem_title(name), None, enabled=False))
-                                continue
-                            elif action == 'recent_clips':
-                                action = (action,)      # set action as tuple and raise AttributeError to read it as a submenu
-                                raise AttributeError
-                            menu.append(pystray.MenuItem(name, action=TRAY_ACTIONS[action]))
-                        except AttributeError:          # AttributeError -> item is a submenu
-                            if isinstance(action, list) or isinstance(action, tuple):
-                                submenu = []
-                                evaluate_menu(action, submenu)
-                                menu.append(pystray.MenuItem(name, pystray.Menu(*submenu)))
-                        except KeyError: logging.warning(f'(X) The following menu item does not exist: "{name}": "{action}"')
+                            else:
+                                menu.append(pystray.MenuItem(lambda _: f'Memory usage: {get_memory():.2f}mb', None, enabled=False))
+                            continue
 
-            tray_menu = [LEFT_CLICK_ACTION] if LEFT_CLICK_ACTION else []        # start with hidden left-click action included, if present
-            evaluate_menu(TRAY_ADVANCED_MODE_MENU, tray_menu)
+                        # normal actions -> create and append menu item
+                        elif action == 'quit': exit_item_exists = True  # confirm that an exit item is in the menu
+                        menu.append(pystray.MenuItem(name, action=TRAY_ACTIONS[action]))
+
+                    # AttributeError means item is (probably) a submenu
+                    except AttributeError:
+                        if isinstance(action, list):
+                            submenu = []
+                            evaluate_menu(action, submenu)
+                            menu.append(pystray.MenuItem(name, pystray.Menu(*submenu)))
+                    except KeyError: logging.warning(f'(X) The following menu item does not exist: "{name}": "{action}"')
+
+            tray_menu = [LEFT_CLICK_ACTION] if LEFT_CLICK_ACTION else []    # start with left-click action included, if present
+            evaluate_menu(TRAY_ADVANCED_MODE_MENU, tray_menu)               # recursively evaluate custom menu
             if not exit_item_exists: tray_menu.append(pystray.MenuItem('Exit', quit_tray))  # add exit item if needed
 
         # creating menu -- "basic" mode
@@ -1448,6 +1576,8 @@ if __name__ == '__main__':
 
         # cleanup *some* extraneous dictionaries/collections/functions
         del verify_ffmpeg
+        del load_menu
+        del restore_menu_file
         del get_clip_tray_action
         del title_callback
         del tray_menu
@@ -1462,6 +1592,7 @@ if __name__ == '__main__':
         del TRAY_LEFT_CLICK_ACTION
         del TRAY_MIDDLE_CLICK_ACTION
         del CONFIG_PATH
+        del CUSTOM_MENU_PATH
 
         # final garbage collection to reduce memory usage
         gc.collect(generation=2)
