@@ -81,6 +81,10 @@ dirname = os.path.dirname
 abspath = os.path.abspath
 splitext = os.path.splitext
 splitpath = os.path.split
+splitdrive = os.path.splitdrive
+ismount = os.path.ismount
+isdir = os.path.isdir
+listdir = os.listdir
 makedirs = os.makedirs
 rename = os.rename
 remove = os.remove
@@ -360,11 +364,11 @@ TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_F
 
 # constructing paths for various files/folders
 RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
-if os.path.splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
+if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
 else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, 'icon.ico')
-if os.path.splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
+if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
-if os.path.splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
+if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
 else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
 
 # ensuring above paths are valid
@@ -508,8 +512,8 @@ else: TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
 # Backup dir cleanup
 # ---------------------
 # VIDEO_FOLDER and BACKUP_FOLDER must be on the same drive or we'll get OSError 17
-if (os.path.splitdrive(VIDEO_FOLDER)[0] != os.path.splitdrive(BACKUP_FOLDER)[0]
-    or os.path.ismount(VIDEO_FOLDER) != os.path.ismount(BACKUP_FOLDER)):
+if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
+    or ismount(VIDEO_FOLDER) != ismount(BACKUP_FOLDER)):
     msg = ("Your video folder and the path for saving temporary "
            "backups are not on the same drive. Instant Replay Suite "
            "cannot backup and restore videos across drives without "
@@ -539,7 +543,7 @@ def verify_ffmpeg():
     else:
         for path in os.environ.get('PATH', '').split(';'):
             try:
-                if 'ffmpeg.exe' in os.listdir(path):
+                if 'ffmpeg.exe' in listdir(path):
                     return
             except: pass
 
@@ -828,7 +832,7 @@ class AutoCutter:
     # --- protecting backup paths ---
         protected_paths = []
         for path in self.get_all_backups():
-            path_dirname, path_basename = os.path.split(path)
+            path_dirname, path_basename = splitpath(path)
             if '.' not in path_basename[20:]: continue                  # skip files with empty basenames
             protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
             protected_paths.append(protected_path)
@@ -1059,10 +1063,10 @@ class AutoCutter:
         ''' Returns all backups in `BACKUP_FOLDER` as a flattened list.
             Assumes all backups start with `time.time_ns()`. '''
         all_backups = []
-        for folder in os.listdir(BACKUP_FOLDER):
+        for folder in listdir(BACKUP_FOLDER):
             try:                                    # get all backup .mp4s and delete empty subfolders
                 subfolder = pjoin(BACKUP_FOLDER, folder)
-                files = os.listdir(subfolder)
+                files = listdir(subfolder)
                 if files: all_backups.extend(pjoin(subfolder, file) for file in files if file[:19].isnumeric())
                 else: os.rmdir(subfolder)
             except: pass
@@ -1081,8 +1085,8 @@ class AutoCutter:
                 if old_backups >= MAX_BACKUPS:      # backup is too old
                     try:    # remove backup, remove its folder if empty, and remove its protected status
                         remove(path)
-                        path_dirname, path_basename = os.path.split(path)
-                        if not os.listdir(dirname(path)): os.rmdir(path_dirname)
+                        path_dirname, path_basename = splitpath(path)
+                        if not listdir(dirname(path)): os.rmdir(path_dirname)
 
                         protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
                         try: self.protected_paths.remove(protected_path)
@@ -1091,7 +1095,7 @@ class AutoCutter:
 
         # add new protected paths
         for path in protected_paths:
-            path_dirname, path_basename = os.path.split(path)
+            path_dirname, path_basename = splitpath(path)
             protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
             logging.info(f'Adding protected path: {protected_path}')
             self.protected_paths.append(protected_path)
@@ -1147,13 +1151,13 @@ class AutoCutter:
             logging.info(f'Scanning {VIDEO_FOLDER} for videos')
 
             # ONLY look at the base files of the base subfolders
-            for filename in os.listdir(VIDEO_FOLDER):
+            for filename in listdir(VIDEO_FOLDER):
                 if filename in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
                 folder = pjoin(VIDEO_FOLDER, filename)
                 if folder == BACKUP_FOLDER: continue    # user might use absolute path for backup folder
 
-                if os.path.isdir(folder):
-                    for file in os.listdir(folder):
+                if isdir(folder):
+                    for file in listdir(folder):
                         path = pjoin(folder, file)
                         stat = getstat(path)            # skip non-mp4 files ↓
                         if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
@@ -1390,7 +1394,7 @@ class AutoCutter:
                     if exists(new): remove(new)                 # delete edited video (if it still exists)
                     if exists(new2):                            # `new2` has been replaced? (this should NOT happen)
                         logging.warn('(!) Clip shares name with concatenated clip that should have been protected: ' + new2)
-                        base, ext = os.path.splitext(new2)
+                        base, ext = splitext(new2)
                         new2 = f'{base} (pre-concat){ext}'      # add " (pre-concat)" marker to `new2`
                     renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
                     rename(pjoin(BACKUP_FOLDER, old2), new2)
