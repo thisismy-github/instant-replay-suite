@@ -44,14 +44,79 @@ TODO pystray subclass improvements
             - an entire thread dedicated to handling double-clicks would likely be needed (unreasonable)
 '''
 
+# ---------------------------------
+#     --- Table of contents ---
+#  Aliases
+#  Base constants
+#  Logging
+#  Settings
+#  Registry settings
+#  Other constants & paths
+#  Reading custom tray menu
+#  Backup dir cleanup
+#  Utility functions
+#  Custom Pystray class
+#  Custom keyboard listener
+#  Clip class
+#  Main class
+#      Helper methods
+#      Acquiring clips
+#      Clip actions
+#  Tray-icon functions
+#  Tray-icon setup
+# ---------------------------------
+
+
+# ---------------------
+# Aliases
+# ---------------------
+sep = os.sep
+sepjoin = sep.join
+pjoin = os.path.join
+exists = os.path.exists
+getstat = os.stat
+getsize = os.path.getsize
+basename = os.path.basename
+dirname = os.path.dirname
+abspath = os.path.abspath
+splitext = os.path.splitext
+splitpath = os.path.split
+makedirs = os.makedirs
+rename = os.rename
+remove = os.remove
+
+
+# ---------------------
+# Base constants
+# ---------------------
+
+# current working directory
+CWD = dirname(os.path.realpath(__file__))
+os.chdir(CWD)
+
+# other paths that will always be the same no matter what
+CONFIG_PATH = pjoin(CWD, 'config.settings.ini')
+CUSTOM_MENU_PATH = pjoin(CWD, 'config.menu.ini')
+LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
+APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
+
+
+# ---------------------
+# Logging
+# ---------------------
+logging.basicConfig(
+    level=logging.INFO,
+    encoding='utf-16',
+    format='{asctime} {lineno:<3} {levelname} {funcName}: {message}',
+    datefmt='%I:%M:%S%p',
+    style='{',
+    handlers=(logging.FileHandler(LOG_PATH, 'w', delay=False),
+              logging.StreamHandler()))
+
+
 # ---------------------
 # Settings
 # ---------------------
-CWD = os.path.dirname(os.path.realpath(__file__))
-os.chdir(CWD)
-CONFIG_PATH = os.path.join(CWD, 'config.settings.ini')
-CUSTOM_MENU_PATH = os.path.join(CWD, 'config.menu.ini')
-
 cfg = ConfigParseBetter(
     CONFIG_PATH,
     caseSensitive=True,
@@ -224,64 +289,6 @@ TRAY_ALIGN_CENTER = cfg.load('ALWAYS_CENTER_ALIGN_TRAY_MENU_ON_OPEN', False)
 
 
 # ---------------------
-# Aliases
-# ---------------------
-sep = os.sep
-sepjoin = sep.join
-pjoin = os.path.join
-exists = os.path.exists
-getstat = os.stat
-getsize = os.path.getsize
-basename = os.path.basename
-dirname = os.path.dirname
-abspath = os.path.abspath
-splitext = os.path.splitext
-splitpath = os.path.split
-makedirs = os.makedirs
-rename = os.rename
-remove = os.remove
-
-
-# ---------------------
-# Constants & paths
-# ---------------------
-APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
-RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
-
-if os.path.splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
-else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, 'icon.ico')
-if os.path.splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
-else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
-if os.path.splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
-else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
-
-assert exists(ICON_PATH), f'No icon exists at {ICON_PATH}!'
-if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
-if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
-# `CLIP_BUFFER` is how many recent clips should be `Clip` objects instead of just strings
-# every clip in the menu + the first one outside the menu should be a `Clip` object
-CLIP_BUFFER = max(2, TRAY_RECENT_CLIP_COUNT) + 1
-
-# misc constants
-TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY = '?recency' in TRAY_RECENT_CLIP_NAME_FORMAT
-TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT = '?recencyshort' in TRAY_RECENT_CLIP_NAME_FORMAT
-TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
-
-
-# ---------------------
-# Logging
-# ---------------------
-logging.basicConfig(
-    level=logging.INFO,
-    encoding='utf-16',
-    format='{asctime} {lineno:<3} {levelname} {funcName}: {message}',
-    datefmt='%I:%M:%S%p',
-    style='{',
-    handlers=(logging.FileHandler(LOG_PATH, 'w', delay=False),
-              logging.StreamHandler()))
-
-
-# ---------------------
 # Registry Settings
 # ---------------------
 # get ShadowPlay video path from registry
@@ -337,6 +344,39 @@ else:
         else: MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
     except: logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
 logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
+
+
+# ------------------------
+# Other constants & paths
+# ------------------------
+# `CLIP_BUFFER` is how many recent clips should be `Clip` objects instead of just strings
+# every clip in the menu + the first one outside the menu should be a `Clip` object
+CLIP_BUFFER = max(2, TRAY_RECENT_CLIP_COUNT) + 1
+
+# misc constants
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY = '?recency' in TRAY_RECENT_CLIP_NAME_FORMAT
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT = '?recencyshort' in TRAY_RECENT_CLIP_NAME_FORMAT
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
+
+# constructing paths for various files/folders
+RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
+if os.path.splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
+else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, 'icon.ico')
+if os.path.splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
+else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
+if os.path.splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
+else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
+
+# ensuring above paths are valid
+assert exists(ICON_PATH), f'No icon exists at {ICON_PATH}!'
+if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
+if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
+
+# ensuring backup folder is valid
+if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
+elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_FOLDER = pjoin(VIDEO_FOLDER, BACKUP_FOLDER)
+elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKUP_FOLDER)
+else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
 
 
 # -------------------------
@@ -467,11 +507,6 @@ else: TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
 # ---------------------
 # Backup dir cleanup
 # ---------------------
-if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
-elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_FOLDER = pjoin(VIDEO_FOLDER, BACKUP_FOLDER)
-elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKUP_FOLDER)
-else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
-
 # VIDEO_FOLDER and BACKUP_FOLDER must be on the same drive or we'll get OSError 17
 if (os.path.splitdrive(VIDEO_FOLDER)[0] != os.path.splitdrive(BACKUP_FOLDER)[0]
     or os.path.ismount(VIDEO_FOLDER) != os.path.ismount(BACKUP_FOLDER)):
