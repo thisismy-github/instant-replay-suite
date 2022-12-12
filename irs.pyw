@@ -455,7 +455,7 @@ def auto_rename_clip(path, name_format=RENAME_FORMAT, date_format=RENAME_DATE_FO
                 count = 2
                 renamed_path_no_ext += ' (?count)'
             while True:
-                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS if count >= 0 else RENAME_COUNT_PADDED_ZEROS + 1)
+                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS + (1 if count >= 0 else 2))
                 renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
                 if not exists(renamed_path) and renamed_path not in protected_paths: break
                 count += 1
