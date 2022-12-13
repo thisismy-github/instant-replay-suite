@@ -49,13 +49,14 @@ TODO pystray subclass improvements
 #  Aliases
 #  Base constants
 #  Logging
+#  Utility functions
+#  Temporary functions
 #  Video path
 #  Settings
 #  Registry settings
 #  Other constants & paths
-#  Utility functions
-#  Reading custom tray menu
-#  Backup dir cleanup
+#  Parsing tray menu file
+#  Path conflict warnings
 #  Custom Pystray class
 #  Custom keyboard listener
 #  Clip class
@@ -103,6 +104,7 @@ CONFIG_PATH = pjoin(CWD, 'config.settings.ini')
 CUSTOM_MENU_PATH = pjoin(CWD, 'config.menu.ini')
 LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
 APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
+SHADOWPLAY_REGISTRY_PATH = r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS'
 
 
 # ---------------------
@@ -119,16 +121,260 @@ logging.basicConfig(
 
 
 # ---------------------
+# Utility functions
+# ---------------------
+#get_memory = lambda: psutil.Process().memory_info().rss / (1024 * 1024)
+get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
+
+
+def show_message(title, msg, flags=0x00040030):
+    ''' Displays a MessageBoxW on the screen with a `title` and
+        `msg`. Default `flags` are <!-symbol + stay on top>.
+        https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw '''
+    logging.info(f'Showing message box "{title}":\n\n---\n{msg}\n---\n')
+    return ctypes.windll.user32.MessageBoxW(None, msg, title, flags)
+
+
+def delete(path: str) -> None:
+    ''' Robustly deletes a given `path`. '''
+    logging.info('Deleting: ' + path)
+    try:
+        if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
+        else: remove(path)
+    except:
+        logging.error(f'(!) Error while deleting file {path}: {format_exc()}')
+        play_alert('error')
+
+
+def renames(old: str, new: str) -> None:
+    ''' `os.py`'s super-rename, but without deleting empty directories. '''
+    head, tail = splitpath(new)
+    if head and tail and not exists(head): makedirs(head)
+    rename(old, new)
+
+
+def auto_rename_clip(path: str) -> None:
+    ''' Renames `path` according to `RENAME_FORMAT` and `RENAME_DATE_FORMAT`,
+        so long as `path` ends with a date formatted as `%Y.%m.%d - %H.%M.%S`,
+        which is found at the end of all ShadowPlay clip names. '''
+    try:
+        parts = basename(path).split()
+        parts[-1] = '.'.join(parts[-1].split('.')[:-3])
+
+        date_string = ' '.join(parts[-3:])
+        date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
+        game = ' '.join(parts[:-3])
+        if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
+
+        renamed_base_no_ext = RENAME_FORMAT.replace('?game', game).replace('?date', date.strftime(RENAME_DATE_FORMAT))
+        renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
+        renamed_path = renamed_path_no_ext + '.mp4'
+
+        count_detected = '?count' in renamed_path_no_ext
+        protected_paths = cutter.protected_paths    # this is exactly what i want to avoid but i'm leaving it for now
+        if count_detected or exists(renamed_path) or renamed_path in protected_paths:
+            count = RENAME_COUNT_START_NUMBER
+            if not count_detected:                  # if forced to add number, use windows-style count: start from (2)
+                count = 2
+                renamed_path_no_ext += ' (?count)'
+            while True:
+                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS + (1 if count >= 0 else 2))
+                renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
+                if not exists(renamed_path) and renamed_path not in protected_paths: break
+                count += 1
+
+        renamed_base = basename(renamed_path)
+        logging.info(f'Renaming video to: {renamed_base}')
+        rename(path, renamed_path)                  # super-rename not needed
+        logging.info('Rename successful.')
+        return abspath(renamed_path), renamed_base  # use abspath to ensure consistent path formatting later on
+    except Exception as error:
+        logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
+        return path, basename(path)
+
+
+def play_alert(sound: str) -> None:
+    ''' Plays a system-wide audio alert. `sound` is the filename of a WAV
+        file located within `RESOURCE_FOLDER`. Plays a generic OS alert if
+        `sound` doesn't exist, or a generic OS error sound if `sound` is
+        "error" and "error.wav" doesn't exist. '''
+    if not AUDIO: return
+    path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
+    logging.info('Playing alert: ' + path)
+
+    if exists(path):
+        try: winsound.PlaySound(path, winsound.SND_ASYNC)
+        except:
+            winsound.MessageBeep(winsound.MB_ICONHAND)      # play OS error sound
+            logging.error(f'(!) Error while playing alert {path}: {format_exc()}')
+    else:       # generic OS alert for missing file, OS error for actual errors
+        if sound == 'error': winsound.MessageBeep(winsound.MB_ICONHAND)
+        else: winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        logging.warning('(!) Alert doesn\'t exist at path ' + path)
+
+
+def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
+    ''' Returns a precise duration for the video at `path`.
+        Returns 0 if `path` is corrupt or an invalid format. '''
+    for track in pymediainfo.MediaInfo.parse(path).tracks:
+        if track.track_type == "Video":
+            return track.duration / 1000
+    return 0
+
+
+# ---------------------
+# Temporary functions
+# ---------------------
+def verify_ffmpeg() -> None:
+    ''' Checks if FFmpeg exists. If it isn't in the script's folder,
+        the user's PATH system variable is checked. If still not found,
+        a message box is displayed and the script exits. '''
+    if exists('ffmpeg.exe'): return
+    else:
+        for path in os.environ.get('PATH', '').split(';'):
+            try:
+                if 'ffmpeg.exe' in listdir(path):
+                    return
+            except: pass
+
+    msg = ("FFmpeg was not detected. FFmpeg is required for all of this "
+           "program's editing features. Please ensure `ffmpeg.exe` is "
+           "either in your PATH or in this program's install folder.\n\n"
+           "You can download FFmpeg for Windows here (not clickable, sorry): "
+           "https://www.gyan.dev/ffmpeg/builds/")
+    show_message('FFmpeg not detected', msg)
+    exit(3)
+
+
+def load_menu(path, comment_prefix='//'):
+    ''' Reads a JSON file at `path`, but fixes common errors users may
+        make, while allowing comments and value-only lines. Lines with
+        `comment_prefix` are ignored. Designed for reading JSON files
+        that are meant to be edited by users. '''
+    with open(path, 'r') as file:
+        striped = (line.strip() for line in file.readlines())
+        raw_json_lines = (line for line in striped if line and line[:2] != comment_prefix)
+
+    json_lines = []
+    for line in raw_json_lines:
+        # allow value-only lines
+        if ':' not in line and line not in ('{', '}', '},'):
+            line = '"": ' + line
+
+        # ensure all nested dictionaries have exactly one trailing comma
+        line = line.replace('}', '},')
+        while ' ,' in line: line = line.replace(' ,', ',')
+        while '},,' in line: line = line.replace('},,', '},')
+        json_lines.append(line)
+
+    # ensure final bracket exists and does not have a trailing comma
+    json_string = '\n'.join(json_lines).rstrip().rstrip(',').rstrip('}') + '}'
+
+    # remove trailing comma from final element of every dictionary
+    comma_index = json_string.find(',')     # string ends with }, so we'll...
+    bracket_index = json_string.find('}')   # ...run out of commas first
+    while comma_index != -1:
+        next_comma_index = json_string.find(',', comma_index + 1)
+        if next_comma_index > bracket_index or next_comma_index == -1:
+            quote_index = json_string.find('"', comma_index)
+            if quote_index > bracket_index or quote_index == -1:
+                start = json_string[:comma_index]
+                end = json_string[comma_index + 1:]
+                json_string = start + end
+            bracket_index = json_string.find('}', bracket_index + 1)
+        comma_index = next_comma_index
+
+    # our `object_pairs_hook` immediately returns the raw list of pairs
+    # instead of creating a dictionary, allowing us to use duplicate keys
+    return json.loads(json_string, object_pairs_hook=lambda pairs: pairs)
+
+
+def restore_menu_file():
+    ''' Creates a fresh menu file at `CUSTOM_MENU_PATH`. '''
+    logging.info(f'Creating fresh menu file at {CUSTOM_MENU_PATH}...')
+    with open(CUSTOM_MENU_PATH, 'w') as file:
+        file.write('''//                     --- CUSTOM TRAY MENU TUTORIAL ---
+//
+// This file defines a custom menu dictionary for your tray icon. It's JSON format,
+// with some leeway in the formatting. Each item consists of a name-action pair,
+// and actions may be named however you please. To create a submenu, add a nested
+// dictionary as an action (see example below). Submenus work just like the base
+// menu, and can be nested indefinitely. Actions without names will still be parsed,
+// and will default to a blank name (see "Special tray actions" for exceptions).
+//
+// Normal tray actions:
+//    "open_log":             Opens this program's log file.
+//    "open_video_folder":    Opens the currently defined "Videos" folder.
+//    "open_install_folder":  Opens this program's root folder.
+//    "open_backup_folder":   Opens the currently defined backup folder.
+//    "play_most_recent":     Plays your most recent clip.
+//    "explore_most_recent":  Opens your most recent clip in Explorer.
+//    "delete_most_recent":   Deletes your most recent clip.
+//    "concatenate_last_two": Concatenates your two most recent clips.
+//    "undo":                 Undoes the last trim or concatenation.
+//    "clear_history":        Clears your clip history.
+//    "update":               Manually checks for new clips and refreshes existing ones.
+//    "quit":                 Exits this program.
+//
+// Special tray actions:
+//    "separator":            Adds a separator in the menu.
+//                                - Cannot be named.
+//                                    ("separator") OR ("": "separator")
+//    "recent_clips":         Displays your most recent clips.
+//                                - Naming this item will place it within a submenu:
+//                                    ("Recent clips": "recent_clips")
+//                                - Not naming this item will display all clips in the base menu:
+//                                    ("recent_clips") OR ("": "recent_clips")
+//    "memory":               Displays current RAM usage.
+//                                - This is somewhat misleading and not worth using.
+//                                - Use "?memory" in the title to represent where the number will be:
+//                                    ("RAM: ?memory": "memory")
+//                                - Not naming this item will default to "Memory usage: ?memorymb":
+//                                    ("memory") OR ("": "memory")
+//                                - This item will be greyed out and is informational only.
+//
+// Submenu example:
+//    {
+//        "Quick actions": {
+//            "Play most recent clip": "play_most_recent",
+//            "View last clip in explorer": "explore_most_recent",
+//            "Concatenate last two clips": "concatenate_last_two",
+//            "Delete most recent clip": "delete_most_recent"
+//        },
+//    }
+// ---------------------------------------------------------------------------
+
+{
+\t"Open...": {
+\t\t"Open root": "open_install_folder",
+\t\t"Open videos": "open_video_folder",
+\t\t"Open backups": "open_backup_folder",
+\t},
+\t"View log": "open_log",
+\t"separator",
+\t"Play last clip": "play_most_recent",
+\t"Explore last clip": "explore_most_recent",
+\t"Undo last action": "undo",
+\t"separator",
+\t"recent_clips",
+\t"separator",
+\t"Update clips": "update",
+\t"Clear history": "clear_history",
+\t"Exit": "quit",
+}''')
+
+
+# ---------------------
 # Video path
 # ---------------------
 # We do this before reading config file to set a hint for whether or not
 # `SAVE_BACKUPS_TO_VIDEO_FOLDER` should default to True or False later.
 try:                # gets ShadowPlay's video path from the registry
     import winreg   # NOTE: ShadowPlay settings are encoded in utf-16 and have a NULL character at the end
-    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS')
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, SHADOWPLAY_REGISTRY_PATH)
     VIDEO_FOLDER = winreg.QueryValueEx(key, 'DefaultPathW')[0].decode('utf-16')[:-1]
-except:
-    logging.warning(f'(!) Could not get video path from registry: {format_exc()}')
+except:             # don't show message box until later
+    logging.warning('(!) Could not read video folder from registry: ' + format_exc())
     VIDEO_FOLDER = None
 
 # True if `VIDEO_FOLDER` and `CWD` are on different drives
@@ -310,23 +556,27 @@ INSTANT_REPLAY_HOTKEY_OVERRIDE = cfg.load('INSTANT_REPLAY_HOTKEY_OVERRIDE')
 TRAY_ALIGN_CENTER = cfg.load('ALWAYS_CENTER_ALIGN_TRAY_MENU_ON_OPEN', False)
 
 
-# ------------------------
+# -----------------------
 # Registry settings
-# ------------------------
+# -----------------------
 # confirm video folder has been set
 if VIDEO_FOLDER_OVERRIDE:
     VIDEO_FOLDER = VIDEO_FOLDER_OVERRIDE.strip()
     logging.info('Overridden video directory: ' + VIDEO_FOLDER)
 elif VIDEO_FOLDER is None:
-    logging.critical('No video path detected.\n\nPlease set VIDEO_FOLDER_OVERRIDE.')
+    msg = ("ShadowPlay video path could not be read from your registry:\n\n"
+           f"HKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\DefaultPathW."
+           "\n\nPlease set `VIDEO_FOLDER_OVERRIDE` in your config file.")
+    show_message('No Video Folder Detected', msg, 0x00040010)   # X-symbol + stay on top
     exit(2)
 else: logging.info('Video directory: ' + VIDEO_FOLDER)
+
 
 # get Instant Replay hotkey from registry (each key is a separate value)
 if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
     try:
         import winreg   # NOTE: ShadowPlay settings are encoded in utf-16 and have a NULL character at the end
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS')
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, SHADOWPLAY_REGISTRY_PATH)
 
         # I have no idea how to actually decode numbers, modifiers, and function keys, so I cheated for all 3
         # NOTE: ctrl and alt do not have left/right counterparts
@@ -343,18 +593,23 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
             if hotkey_part in modifier_keys: hotkey.append(modifier_keys[hotkey_part])
             elif not hotkey_part.isupper(): hotkey.append(f_keys[hotkey_part])
             else: hotkey.append(hotkey_part)
-
         INSTANT_REPLAY_HOTKEY = ' + '.join(hotkey)
+
     except:
-        logging.critical(f'Could not detect Instant-Replay hotkey from registry: {format_exc()}\n\nPlease set INSTANT_REPLAY_HOTKEY_OVERRIDE.')
-        sys.exit(3)
+        msg = ("ShadowPlay Instant-Replay hotkey could not be read from your "
+               f"registry:\n\nHKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\"
+               "DVRHKey___\n\nPlease set `INSTANT_REPLAY_HOTKEY_OVERRIDE` in "
+               "your config file.\n\nFull error traceback: " + format_exc())
+        show_message('No Instant-Replay Hotkey Detected', msg, 0x00040010)  # X-symbol + stay on top
+        exit(2)
 else: INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
 logging.info(f'Instant replay hotkey: "{INSTANT_REPLAY_HOTKEY}"')
+
 
 # get taskbar position from registry (NOTE: 0 = left, 1 = top, 2 = right, 3 = bottom)
 if TRAY_ALIGN_CENTER: MENU_ALIGNMENT = win32.TPM_CENTERALIGN | win32.TPM_TOPALIGN
 else:
-    try:    # NOTE: this value takes a few moments to update after moving the taskbar (if you're testing this)
+    try:    # NOTE: this value takes a few moments to update after moving the taskbar
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3')
         taskbar_position = winreg.QueryValueEx(key, 'Settings')[0][12]
 
@@ -371,6 +626,10 @@ logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
 # `CLIP_BUFFER` is how many recent clips should be `Clip` objects instead of just strings
 # every clip in the menu + the first one outside the menu should be a `Clip` object
 CLIP_BUFFER = max(2, TRAY_RECENT_CLIP_COUNT) + 1
+
+# missing config/menu file (menu file only "missing" when custom menu enabled)
+NO_CONFIG = not exists(CONFIG_PATH)
+NO_MENU = TRAY_ADVANCED_MODE and not exists(CUSTOM_MENU_PATH)
 
 # misc constants
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY = '?recency' in TRAY_RECENT_CLIP_NAME_FORMAT
@@ -398,270 +657,73 @@ elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKU
 else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
 
 
-# ---------------------
-# Utility functions
-# ---------------------
-#get_memory = lambda: psutil.Process().memory_info().rss / (1024 * 1024)
-get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
-
-def delete(path: str) -> None:
-    ''' Robustly deletes a given `path`. '''
-    logging.info('Deleting: ' + path)
-    try:
-        if SEND_DELETED_FILES_TO_RECYCLE_BIN: send2trash.send2trash(path)
-        else: remove(path)
-    except:
-        logging.error(f'(!) Error while deleting file {path}: {format_exc()}')
-        play_alert('error')
-
-
-def renames(old: str, new: str) -> None:
-    ''' `os.py`'s super-rename, but without deleting empty directories. '''
-    head, tail = splitpath(new)
-    if head and tail and not exists(head): makedirs(head)
-    rename(old, new)
-
-
-def auto_rename_clip(path: str) -> None:
-    ''' Renames `path` according to `RENAME_FORMAT` and `RENAME_DATE_FORMAT`,
-        so long as `path` ends with a date formatted as `%Y.%m.%d - %H.%M.%S`,
-        which is found at the end of all ShadowPlay clip names. '''
-    try:
-        parts = basename(path).split()
-        parts[-1] = '.'.join(parts[-1].split('.')[:-3])
-
-        date_string = ' '.join(parts[-3:])
-        date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
-        game = ' '.join(parts[:-3])
-        if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
-
-        renamed_base_no_ext = RENAME_FORMAT.replace('?game', game).replace('?date', date.strftime(RENAME_DATE_FORMAT))
-        renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
-        renamed_path = renamed_path_no_ext + '.mp4'
-
-        count_detected = '?count' in renamed_path_no_ext
-        protected_paths = cutter.protected_paths    # this is exactly what i want to avoid but i'm leaving it for now
-        if count_detected or exists(renamed_path) or renamed_path in protected_paths:
-            count = RENAME_COUNT_START_NUMBER
-            if not count_detected:                  # if forced to add number, use windows-style count: start from (2)
-                count = 2
-                renamed_path_no_ext += ' (?count)'
-            while True:
-                count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS + (1 if count >= 0 else 2))
-                renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
-                if not exists(renamed_path) and renamed_path not in protected_paths: break
-                count += 1
-
-        renamed_base = basename(renamed_path)
-        logging.info(f'Renaming video to: {renamed_base}')
-        rename(path, renamed_path)                  # super-rename not needed
-        logging.info('Rename successful.')
-        return abspath(renamed_path), renamed_base  # use abspath to ensure consistent path formatting later on
-    except Exception as error:
-        logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
-        return path, basename(path)
-
-
-def play_alert(sound: str) -> None:
-    ''' Plays a system-wide audio alert. `sound` is the filename of a WAV
-        file located within `RESOURCE_FOLDER`. Plays a generic OS alert if
-        `sound` doesn't exist, or a generic OS error sound if `sound` is
-        "error" and "error.wav" doesn't exist. '''
-    if not AUDIO: return
-    path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
-    logging.info('Playing alert: ' + path)
-
-    if exists(path):
-        try: winsound.PlaySound(path, winsound.SND_ASYNC)
-        except:
-            winsound.MessageBeep(winsound.MB_ICONHAND)      # play OS error sound
-            logging.error(f'(!) Error while playing alert {path}: {format_exc()}')
-    else:       # generic OS alert for missing file, OS error for actual errors
-        if sound == 'error': winsound.MessageBeep(winsound.MB_ICONHAND)
-        else: winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-        logging.warning('(!) Alert doesn\'t exist at path ' + path)
-
-
-def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
-    ''' Returns a precise duration for the video at `path`.
-        Returns 0 if `path` is corrupt or an invalid format. '''
-    for track in pymediainfo.MediaInfo.parse(path).tracks:
-        if track.track_type == "Video":
-            return track.duration / 1000
-    return 0
-
-
-def verify_ffmpeg() -> None:
-    ''' Checks if FFmpeg exists. If it isn't in the script's folder,
-        the user's PATH system variable is checked. If still not found,
-        a message box is displayed and the script exits. '''
-    if exists('ffmpeg.exe'): return
-    else:
-        for path in os.environ.get('PATH', '').split(';'):
-            try:
-                if 'ffmpeg.exe' in listdir(path):
-                    return
-            except: pass
-
-    msg = ("FFmpeg was not detected. FFmpeg is required for all of this "
-           "program's editing features. Please ensure `ffmpeg.exe` is "
-           "either in your PATH or in this program's install folder.\n\n"
-           "You can download FFmpeg for Windows here (not clickable, sorry): "
-           "https://www.gyan.dev/ffmpeg/builds/")
-    MessageBox = ctypes.windll.user32.MessageBoxW   # flags are warning symbol + stay on top
-    MessageBox(None, msg, 'Instant Replay Suite — FFmpeg not detected', 0x00040010)
-    raise FileNotFoundError('''\n\n---\n
-FFmpeg was not detected. FFmpeg is required for all of Instant Replay Suite's editing features.
-
-Please ensure `ffmpeg.exe` is either in your PATH or in this program's install folder.
-You can download FFmpeg for Windows from here: https://www.gyan.dev/ffmpeg/builds/\n\n---''')
-
-
-
-# -------------------------
-# Reading custom tray menu
-# -------------------------
-def load_menu(path, comment_prefix='//'):
-    ''' Reads a JSON file at `path`, but fixes common errors users may
-        make, while allowing comments and value-only lines. Lines with
-        `comment_prefix` are ignored. Designed for reading JSON files
-        that are meant to be edited by users. '''
-    with open(path, 'r') as file:
-        striped = (line.strip() for line in file.readlines())
-        raw_json_lines = (line for line in striped if line and line[:2] != comment_prefix)
-
-    json_lines = []
-    for line in raw_json_lines:
-        # allow value-only lines
-        if ':' not in line and line not in ('{', '}', '},'):
-            line = '"": ' + line
-
-        # ensure all nested dictionaries have exactly one trailing comma
-        line = line.replace('}', '},')
-        while ' ,' in line: line = line.replace(' ,', ',')
-        while '},,' in line: line = line.replace('},,', '},')
-        json_lines.append(line)
-
-    # ensure final bracket exists and does not have a trailing comma
-    json_string = '\n'.join(json_lines).rstrip().rstrip(',').rstrip('}') + '}'
-
-    # remove trailing comma from final element of every dictionary
-    comma_index = json_string.find(',')     # string ends with }, so we'll...
-    bracket_index = json_string.find('}')   # ...run out of commas first
-    while comma_index != -1:
-        next_comma_index = json_string.find(',', comma_index + 1)
-        if next_comma_index > bracket_index or next_comma_index == -1:
-            quote_index = json_string.find('"', comma_index)
-            if quote_index > bracket_index or quote_index == -1:
-                start = json_string[:comma_index]
-                end = json_string[comma_index + 1:]
-                json_string = start + end
-            bracket_index = json_string.find('}', bracket_index + 1)
-        comma_index = next_comma_index
-
-    # our `object_pairs_hook` immediately returns the raw list of pairs
-    # instead of creating a dictionary, allowing us to use duplicate keys
-    return json.loads(json_string, object_pairs_hook=lambda pairs: pairs)
-
-
-def restore_menu_file():
-    ''' Creates a fresh menu file at `CUSTOM_MENU_PATH`. '''
-    logging.info(f'Creating fresh menu file at {CUSTOM_MENU_PATH}...')
-    with open(CUSTOM_MENU_PATH, 'w') as file:
-        file.write('''//                     --- CUSTOM TRAY MENU TUTORIAL ---
-//
-// This file defines a custom menu dictionary for your tray icon. It's JSON format,
-// with some leeway in the formatting. Each item consists of a name-action pair,
-// and actions may be named however you please. To create a submenu, add a nested
-// dictionary as an action (see example below). Submenus work just like the base
-// menu, and can be nested indefinitely. Actions without names will still be parsed,
-// and will default to a blank name (see "Special tray actions" for exceptions).
-//
-// Normal tray actions:
-//    "open_log":             Opens this program's log file.
-//    "open_video_folder":    Opens the currently defined "Videos" folder.
-//    "open_install_folder":  Opens this program's root folder.
-//    "open_backup_folder":   Opens the currently defined backup folder.
-//    "play_most_recent":     Plays your most recent clip.
-//    "explore_most_recent":  Opens your most recent clip in Explorer.
-//    "delete_most_recent":   Deletes your most recent clip.
-//    "concatenate_last_two": Concatenates your two most recent clips.
-//    "undo":                 Undoes the last trim or concatenation.
-//    "clear_history":        Clears your clip history.
-//    "update":               Manually checks for new clips and refreshes existing ones.
-//    "quit":                 Exits this program.
-//
-// Special tray actions:
-//    "separator":            Adds a separator in the menu.
-//                                - Cannot be named.
-//                                    ("separator") OR ("": "separator")
-//    "recent_clips":         Displays your most recent clips.
-//                                - Naming this item will place it within a submenu:
-//                                    ("Recent clips": "recent_clips")
-//                                - Not naming this item will display all clips in the base menu:
-//                                    ("recent_clips") OR ("": "recent_clips")
-//    "memory":               Displays current RAM usage.
-//                                - This is somewhat misleading and not worth using.
-//                                - Use "?memory" in the title to represent where the number will be:
-//                                    ("RAM: ?memory": "memory")
-//                                - Not naming this item will default to "Memory usage: ?memorymb":
-//                                    ("memory") OR ("": "memory")
-//                                - This item will be greyed out and is informational only.
-//
-// Submenu example:
-//    {
-//        "Quick actions": {
-//            "Play most recent clip": "play_most_recent",
-//            "View last clip in explorer": "explore_most_recent",
-//            "Concatenate last two clips": "concatenate_last_two",
-//            "Delete most recent clip": "delete_most_recent"
-//        },
-//    }
-// ---------------------------------------------------------------------------
-
-{
-\t"Open...": {
-\t\t"Open root": "open_install_folder",
-\t\t"Open videos": "open_video_folder",
-\t\t"Open backups": "open_backup_folder",
-\t},
-\t"View log": "open_log",
-\t"separator",
-\t"Play last clip": "play_most_recent",
-\t"Explore last clip": "explore_most_recent",
-\t"Undo last action": "undo",
-\t"separator",
-\t"recent_clips",
-\t"separator",
-\t"Update clips": "update",
-\t"Clear history": "clear_history",
-\t"Exit": "quit",
-}''')
-
-
+# -----------------------
+# Parsing tray menu file
+# -----------------------
 if not TRAY_ADVANCED_MODE: TRAY_ADVANCED_MODE_MENU = None
-else: TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
+else:   # parse menu file if it exists, and warn/exit if parsing fails
+    if not NO_MENU:
+        try: TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
+        except json.decoder.JSONDecodeError as error:
+            msg = ("Error while reading your custom menu file "
+                   f"({CUSTOM_MENU_PATH}):\n\nJSONDecodeError - {error}\n\n"
+                   "The custom menu file follows JSON syntax. If you need "
+                   "to reset your menu file, delete your existing one and "
+                   "restart Instant Replay Suite to generate a fresh copy.")
+            show_message('Invalid Menu File', msg)
+            exit(2)
 
 
-# ---------------------
-# Backup dir cleanup
-# ---------------------
-# VIDEO_FOLDER and BACKUP_FOLDER must be on the same drive or we'll get OSError 17
+# -----------------------
+# Path conflict warnings
+# -----------------------
+# `VIDEO_FOLDER` and `BACKUP_FOLDER` must be on the same drive or we'll get OSError 17
 if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
     or ismount(VIDEO_FOLDER) != ismount(BACKUP_FOLDER)):
-    msg = ("Your video folder and the path for saving temporary "
-           "backups are not on the same drive. Instant Replay Suite "
-           "cannot backup and restore videos across drives without "
-           "copying them back and forth.\n\nVideo folder: "
-           f"{VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}\n\n"
-           "Please set `SAVE_BACKUPS_TO_VIDEO_FOLDER` or specify "
-           "an absolute path for `BACKUP_FOLDER` on the same drive.")
-    MessageBox = ctypes.windll.user32.MessageBoxW   # flags are !-symbol + stay on top
-    MessageBox(None, msg, 'Invalid Backup Directory', 0x00040030)
-    logging.error(msg)
-    exit(17)
 
+    # quietly restore config/menu files if needed so user can reference them
+    if NO_CONFIG: cfg.write()
+    if NO_MENU: restore_menu_file()
+
+    drive = splitdrive(VIDEO_FOLDER)[0]
+    msg = ("Your video folder and the path for saving temporary backups are "
+           "not on the same drive. Instant Replay Suite cannot backup and "
+           "restore videos across drives without copying them back and forth."
+           f"\n\nVideo folder: {VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}"
+           f"\n\nTo resolve this conflict, open \"{basename(CONFIG_PATH)}\" "
+           "and set `SAVE_BACKUPS_TO_VIDEO_FOLDER` to True or set "
+           f"`BACKUP_FOLDER` to an absolute path on the {drive} drive.")
+
+    show_message('Invalid Backup Directory', msg)
+    exit(2)
+
+# ensure `BACKUP_FOLDER` exists, but only once we've dealt with conflicts
 if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
+
+# display warning if config and/or menu file is missing
+if NO_CONFIG or NO_MENU:
+    if NO_CONFIG and NO_MENU: parts = ('config file or a menu file', 'them', 'files')
+    elif NO_CONFIG: parts = ('config file', 'it', 'file')
+    else: parts = ('menu file', 'it', 'file')
+    string1, string2, string3 = parts
+
+    msg = (f"You do not have a {string1}. Would you like to exit Instant "
+           f"Replay Suite to create {string2} and review them now?\n\n"
+           "Press 'No' if you want to continue with the default settings "
+           f"(the necessary {string3} will be created on exit).")
+
+    # ?-symbol, stay on top, Yes/No
+    response = show_message('Missing config/menu files', msg, 0x00040024)
+    if response == 6:       # Yes
+        logging.info('Yes selected on missing config/menu dialog, closing...')
+        if NO_MENU:         # create AFTER dialog is closed to avoid confusion
+            restore_menu_file()
+        exit(1)
+    elif response == 7:     # No
+        logging.info('No selected on missing config/menu dialog, using defaults.')
+        if NO_MENU:         # create/read AFTER dialog is closed to avoid confusion
+            restore_menu_file()
+            TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
 
 
 # ---------------------
@@ -855,7 +917,10 @@ class AutoCutter:
 
                 # sort history by creation date to resolve most issues before they arise
                 lines.sort(key=lambda clip: getstat(clip).st_ctime, reverse=True)
-                last_clips = [Clip(path, getstat(path)) if index < CLIP_BUFFER else path for index, path in enumerate(lines)]
+                last_clips = [Clip(path, getstat(path), rename=False)
+                              if index < CLIP_BUFFER
+                              else path
+                              for index, path in enumerate(lines)]
                 last_clips.reverse()                                    # .reverse() is a very fast operation
                 if last_clips: logging.info(f'Previous {len(last_clips)} clip{"s" if len(last_clips) != 1 else ""} loaded: {last_clips}')
                 else: logging.info('No previous clips detected.')
@@ -868,16 +933,26 @@ class AutoCutter:
         # no history file -- run first-time setup
         else:
             self.last_clips = []
-            msg = ("It appears to be your first time running Instant Replay Suite "
-                   "(or you deleted your history file). Please review your hotkey "
-                   "and renaming settings and restart if necessary.\n\nWould you "
-                   "like to organize, rename, and add all existing clips in "
-                   f"{VIDEO_FOLDER}? Click cancel to exit Instant Replay Suite.")
-            MessageBox = ctypes.windll.user32.MessageBoxW               # flags are ?-symbol, stay on top, Yes/No/Cancel
-            response = MessageBox(None, msg, 'Welcome to Instant Replay Suite', 0x00040023)
+
+            # put together simple, dynamic message for message box
+            msg = ("It appears you do not have a history file. Would you "
+                   f"like to add all existing clips in {VIDEO_FOLDER}? ")
+            if IGNORE_VIDEOS_IN_THESE_FOLDERS:
+                msg += '\n\nThe following subfolders will be ignored:\n\t"'
+                msg += '"\n\t"'.join(IGNORE_VIDEOS_IN_THESE_FOLDERS) + '"'
+            else:
+                msg += ("Your `IGNORED_FOLDERS` setting is empty, so "
+                        "all subfolders will be scanned.")
+            msg += (f"\n\nAny clips matching ShadowPlay's naming format will "
+                    "be renamed to match your own `NAME_FORMAT` setting: "
+                    f"\n\t\"{RENAME_FORMAT}\"")
+            msg += '\n\nClick cancel to exit Instant Replay Suite.'
+
+            # ?-symbol, stay on top, Yes/No/Cancel
+            response = show_message('Welcome to Instant Replay Suite', msg, 0x00040023)
             if response == 2:       # Cancel/X
                 logging.info('Cancel selected on welcome dialog, closing...')
-                exit(2)
+                exit(1)
             elif response == 7:     # No
                 logging.info('No selected on welcome dialog, not retroactively adding clips.')
             elif response == 6:     # Yes
@@ -1650,6 +1725,9 @@ if __name__ == '__main__':
         del TRAY_MIDDLE_CLICK_ACTION
         del CONFIG_PATH
         del CUSTOM_MENU_PATH
+        del SHADOWPLAY_REGISTRY_PATH
+        del NO_CONFIG
+        del NO_MENU
 
         # final garbage collection to reduce memory usage
         gc.collect(generation=2)
