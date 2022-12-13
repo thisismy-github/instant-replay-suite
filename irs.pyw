@@ -72,6 +72,7 @@ TODO pystray subclass improvements
 # ---------------------
 # Aliases
 # ---------------------
+parsemedia = pymediainfo.MediaInfo.parse
 sep = os.sep
 sepjoin = sep.join
 pjoin = os.path.join
@@ -101,12 +102,18 @@ SCRIPT_START_TIME = time.time()
 CWD = dirname(os.path.realpath(__file__))
 os.chdir(CWD)
 
+# executable constants
+IS_COMPILED = getattr(sys, 'frozen', False)
+BIN_FOLDER = pjoin(CWD, 'PIL')
+MEDIAINFO_DLL_PATH = pjoin(BIN_FOLDER, 'MediaInfo.dll') if IS_COMPILED else None
+
 # other paths that will always be the same no matter what
 CONFIG_PATH = pjoin(CWD, 'config.settings.ini')
 CUSTOM_MENU_PATH = pjoin(CWD, 'config.menu.ini')
-LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
 APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
 SHADOWPLAY_REGISTRY_PATH = r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS'
+if IS_COMPILED: LOG_PATH = pjoin(CWD, 'InstantReplaySuite.log')
+else: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
 
 
 # ---------------------
@@ -218,7 +225,7 @@ def play_alert(sound: str) -> None:
 def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
     ''' Returns a precise duration for the video at `path`.
         Returns 0 if `path` is corrupt or an invalid format. '''
-    for track in pymediainfo.MediaInfo.parse(path).tracks:
+    for track in parsemedia(path, library_file=MEDIAINFO_DLL_PATH).tracks:
         if track.track_type == "Video":
             return track.duration / 1000
     return 0
@@ -245,7 +252,7 @@ def verify_ffmpeg() -> None:
            "You can download FFmpeg for Windows here (not clickable, sorry): "
            "https://www.gyan.dev/ffmpeg/builds/")
     show_message('FFmpeg not detected', msg)
-    exit(3)
+    sys.exit(3)
 
 
 def load_menu(path, comment_prefix='//'):
@@ -573,7 +580,7 @@ elif VIDEO_FOLDER is None:
            f"HKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\DefaultPathW."
            "\n\nPlease set `VIDEO_FOLDER_OVERRIDE` in your config file.")
     show_message('No Video Folder Detected', msg, 0x00040010)   # X-symbol + stay on top
-    exit(2)
+    sys.exit(2)
 else: logging.info('Video directory: ' + VIDEO_FOLDER)
 
 
@@ -606,7 +613,7 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
                "DVRHKey___\n\nPlease set `INSTANT_REPLAY_HOTKEY_OVERRIDE` in "
                "your config file.\n\nFull error traceback: " + format_exc())
         show_message('No Instant-Replay Hotkey Detected', msg, 0x00040010)  # X-symbol + stay on top
-        exit(2)
+        sys.exit(2)
 else: INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
 logging.info(f'Instant replay hotkey: "{INSTANT_REPLAY_HOTKEY}"')
 
@@ -651,9 +658,14 @@ if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
 else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
 
 # ensuring above paths are valid
-assert exists(ICON_PATH), f'No icon exists at {ICON_PATH}!'
 if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
 if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
+if not exists(ICON_PATH):   # if icon does not exist, use secret backup
+    if IS_COMPILED: ICON_PATH = pjoin(BIN_FOLDER, 'libico.dll')
+    else:                   # if running from the script, warn and exit
+        msg = 'No icon detected at `ICON_PATH`: ' + ICON_PATH
+        show_message('No icon detected', msg)
+        exit(3)
 
 # ensuring backup folder is valid
 if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
@@ -676,7 +688,7 @@ else:   # parse menu file if it exists, and warn/exit if parsing fails
                    "to reset your menu file, delete your existing one and "
                    "restart Instant Replay Suite to generate a fresh copy.")
             show_message('Invalid Menu File', msg)
-            exit(2)
+            sys.exit(2)
 
 
 # -----------------------
@@ -700,7 +712,7 @@ if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
            f"`BACKUP_FOLDER` to an absolute path on the {drive} drive.")
 
     show_message('Invalid Backup Directory', msg)
-    exit(2)
+    sys.exit(2)
 
 # ensure `BACKUP_FOLDER` exists, but only once we've dealt with conflicts
 if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
@@ -723,7 +735,7 @@ if NO_CONFIG or NO_MENU:
         logging.info('Yes selected on missing config/menu dialog, closing...')
         if NO_MENU:         # create AFTER dialog is closed to avoid confusion
             restore_menu_file()
-        exit(1)
+        sys.exit(1)
     elif response == 7:     # No
         logging.info('No selected on missing config/menu dialog, using defaults.')
         if NO_MENU:         # create/read AFTER dialog is closed to avoid confusion
@@ -957,7 +969,7 @@ class AutoCutter:
             response = show_message('Welcome to Instant Replay Suite', msg, 0x00040023)
             if response == 2:       # Cancel/X
                 logging.info('Cancel selected on welcome dialog, closing...')
-                exit(1)
+                sys.exit(1)
             elif response == 7:     # No
                 logging.info('No selected on welcome dialog, not retroactively adding clips.')
             elif response == 6:     # Yes
@@ -1285,6 +1297,7 @@ class AutoCutter:
             clip_length = clip.length
             logging.info(f'Trimming clip {clip.name} to {length} seconds')
             logging.info(f'Clip is {clip_length:.2f} seconds long.')
+            logging.info(f'{clip_length}: {type(clip_length)} | {length}: {type(length)}')
             if clip_length <= length: return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
 
             relative_temp_path = pjoin(clip.game, f'{time.time_ns()}.{clip.name}')
