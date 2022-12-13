@@ -95,6 +95,8 @@ remove = os.remove
 # ---------------------
 # Base constants
 # ---------------------
+SCRIPT_START_TIME = time.time()
+
 # current working directory
 CWD = dirname(os.path.realpath(__file__))
 os.chdir(CWD)
@@ -1218,12 +1220,16 @@ class AutoCutter:
 
             # determine the timestamp that all new videos should be after
             last_clips = self.last_clips
-            if not manual_update:                       # wait for instant replay to finish saving
+            if not manual_update:   # auto-update -> wait for instant replay to finish saving
                 logging.info('Instant replay detected! Waiting 3 seconds...')
                 last_clip_time = time.time() - 1
                 time.sleep(3)
             elif from_time is not None: last_clip_time = from_time
-            else: last_clip_time = last_clips[-1].time
+            else:                   # if no clips in last_clips -> use history file's creation date
+                try: last_clip_time = last_clips[-1].time
+                except IndexError:  # if no history file -> use script's start time
+                    try: last_clip_time = getstat(HISTORY_PATH).st_ctime
+                    except: last_clip_time = SCRIPT_START_TIME
             logging.info(f'Scanning {VIDEO_FOLDER} for videos')
 
             # ONLY look at the base files of the base subfolders
@@ -1253,7 +1259,7 @@ class AutoCutter:
             play_alert('error')
 
         finally:
-            if manual_update:   # sort last_clips and then verify the cache
+            if manual_update:       # sort last_clips and then verify the cache
                 last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
                 for index, clip in enumerate(reversed(last_clips)):
                     if isinstance(clip, Clip) and index >= CLIP_BUFFER:
