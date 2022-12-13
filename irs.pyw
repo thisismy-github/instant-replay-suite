@@ -397,7 +397,10 @@ cfg = ConfigParseBetter(
 # --- Hotkeys ---
 cfg.setSection(' --- Trim Hotkeys --- ')
 cfg.comment('Usage: <hotkey> = <trim length>')
-LENGTH_DICTIONARY = {key: length for key, length in cfg.loadAllFromSection()}
+LENGTH_DICTIONARY = {}
+for key, length in cfg.loadAllFromSection():
+    try: LENGTH_DICTIONARY[key] = int(float(length.strip()))
+    except: logging.warning(f'(!) Could not add trim length "{length}"')
 if not LENGTH_DICTIONARY:
     LENGTH_DICTIONARY = {
         'alt + 1': 10,
