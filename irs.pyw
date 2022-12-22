@@ -96,24 +96,29 @@ remove = os.remove
 # ---------------------
 # Base constants
 # ---------------------
+TITLE = 'Instant Replay Suite'
+VERSION = '1.0.0'
+REPOSITORY_URL = 'https://github.com/thisismy-github/instant-replay-suite'
+
+# ---
+
+IS_COMPILED = getattr(sys, 'frozen', False)
 SCRIPT_START_TIME = time.time()
 
 # current working directory
-CWD = dirname(os.path.realpath(__file__))
+SCRIPT_PATH = sys.executable if IS_COMPILED else os.path.realpath(__file__)
+CWD = dirname(SCRIPT_PATH)
 os.chdir(CWD)
 
-# executable constants
-IS_COMPILED = getattr(sys, 'frozen', False)
-BIN_FOLDER = pjoin(CWD, 'PIL')
-MEDIAINFO_DLL_PATH = pjoin(BIN_FOLDER, 'MediaInfo.dll') if IS_COMPILED else None
-
 # other paths that will always be the same no matter what
+BIN_FOLDER = pjoin(CWD, 'bin')
+APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), TITLE)
 CONFIG_PATH = pjoin(CWD, 'config.settings.ini')
 CUSTOM_MENU_PATH = pjoin(CWD, 'config.menu.ini')
-APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), 'Instant Replay Suite')
 SHADOWPLAY_REGISTRY_PATH = r'SOFTWARE\NVIDIA Corporation\Global\ShadowPlay\NVSPCAPS'
-if IS_COMPILED: LOG_PATH = pjoin(CWD, 'InstantReplaySuite.log')
-else: LOG_PATH = basename(__file__.replace('.pyw', '.log').replace('.py', '.log'))
+
+LOG_PATH = splitext(basename(SCRIPT_PATH))[0] + '.log'
+MEDIAINFO_DLL_PATH = pjoin(BIN_FOLDER, 'MediaInfo.dll') if IS_COMPILED else None
 
 
 # ---------------------
@@ -160,6 +165,15 @@ def renames(old: str, new: str) -> None:
     head, tail = splitpath(new)
     if head and tail and not exists(head): makedirs(head)
     rename(old, new)
+
+
+def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
+    ''' Returns a precise duration for the video at `path`.
+        Returns 0 if `path` is corrupt or an invalid format. '''
+    for track in parsemedia(path, library_file=MEDIAINFO_DLL_PATH).tracks:
+        if track.track_type == "Video":
+            return track.duration / 1000
+    return 0
 
 
 def auto_rename_clip(path: str) -> None:
@@ -220,15 +234,6 @@ def play_alert(sound: str) -> None:
         if sound == 'error': winsound.MessageBeep(winsound.MB_ICONHAND)
         else: winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
         logging.warning('(!) Alert doesn\'t exist at path ' + path)
-
-
-def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
-    ''' Returns a precise duration for the video at `path`.
-        Returns 0 if `path` is corrupt or an invalid format. '''
-    for track in parsemedia(path, library_file=MEDIAINFO_DLL_PATH).tracks:
-        if track.track_type == "Video":
-            return track.duration / 1000
-    return 0
 
 
 # ---------------------
@@ -504,7 +509,7 @@ del cleaned
 cfg.setSection(' --- Tray Menu --- ')
 cfg.comment(f'''If `USE_CUSTOM_MENU` is True, {basename(CUSTOM_MENU_PATH)} is used to
 create a custom menu. See {basename(CUSTOM_MENU_PATH)} for more information.
-If deleted, set this to True and restart Instant Replay Suite.''')
+If deleted, set this to True and restart {TITLE}.''')
 TRAY_ADVANCED_MODE = cfg.load('USE_CUSTOM_MENU', True)
 
 # --- Basic mode (TRAY_ADVANCED_MODE = False) only ---
@@ -587,7 +592,7 @@ else: logging.info('Video directory: ' + VIDEO_FOLDER)
 # get Instant Replay hotkey from registry (each key is a separate value)
 if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
     try:
-        import winreg   # NOTE: ShadowPlay settings are encoded in utf-16 and have a NULL character at the end
+        import winreg
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, SHADOWPLAY_REGISTRY_PATH)
 
         # I have no idea how to actually decode numbers, modifiers, and function keys, so I cheated for all 3
@@ -599,6 +604,7 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
         total_keys_encoded_string = winreg.QueryValueEx(key, 'DVRHKeyCount')[0]
         total_keys = int(str(total_keys_encoded_string)[5])
 
+        # NOTE: ShadowPlay settings are encoded in utf-16 and have a NULL character at the end
         hotkey = []
         for key_number in range(total_keys):
             hotkey_part = winreg.QueryValueEx(key, f'DVRHKey{key_number}')[0].decode('utf-16')[:-1]
@@ -612,8 +618,8 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
                f"registry:\n\nHKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\"
                "DVRHKey___\n\nPlease set `INSTANT_REPLAY_HOTKEY_OVERRIDE` in "
                "your config file.\n\nFull error traceback: " + format_exc())
-        show_message('No Instant-Replay Hotkey Detected', msg, 0x00040010)  # X-symbol + stay on top
-        sys.exit(2)
+        show_message('No Instant-Replay Hotkey Detected', msg, 0x00040010)
+        sys.exit(2)             # flags are X-symbol + stay on top ^
 else: INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
 logging.info(f'Instant replay hotkey: "{INSTANT_REPLAY_HOTKEY}"')
 
@@ -664,8 +670,8 @@ if not exists(ICON_PATH):   # if icon does not exist, use secret backup
     if IS_COMPILED: ICON_PATH = pjoin(BIN_FOLDER, 'libico.dll')
     else:                   # if running from the script, warn and exit
         msg = 'No icon detected at `ICON_PATH`: ' + ICON_PATH
-        show_message('No icon detected', msg)
-        exit(3)
+        show_message('No icon detected', msg, 0x00040010)
+        sys.exit(3)
 
 # ensuring backup folder is valid
 if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
@@ -686,7 +692,7 @@ else:   # parse menu file if it exists, and warn/exit if parsing fails
                    f"({CUSTOM_MENU_PATH}):\n\nJSONDecodeError - {error}\n\n"
                    "The custom menu file follows JSON syntax. If you need "
                    "to reset your menu file, delete your existing one and "
-                   "restart Instant Replay Suite to generate a fresh copy.")
+                   f"restart {TITLE} to generate a fresh copy.")
             show_message('Invalid Menu File', msg)
             sys.exit(2)
 
@@ -703,10 +709,10 @@ if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
     if NO_MENU: restore_menu_file()
 
     drive = splitdrive(VIDEO_FOLDER)[0]
-    msg = ("Your video folder and the path for saving temporary backups are "
-           "not on the same drive. Instant Replay Suite cannot backup and "
-           "restore videos across drives without copying them back and forth."
-           f"\n\nVideo folder: {VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}"
+    msg = ("Your video folder and the path for saving temporary backups "
+           f"are not on the same drive. {TITLE} cannot backup and restore "
+           "videos across drives without copying them back and forth.\n\n"
+           f"Video folder: {VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}"
            f"\n\nTo resolve this conflict, open \"{basename(CONFIG_PATH)}\" "
            "and set `SAVE_BACKUPS_TO_VIDEO_FOLDER` to True or set "
            f"`BACKUP_FOLDER` to an absolute path on the {drive} drive.")
@@ -724,10 +730,10 @@ if NO_CONFIG or NO_MENU:
     else: parts = ('menu file', 'it', 'file')
     string1, string2, string3 = parts
 
-    msg = (f"You do not have a {string1}. Would you like to exit Instant "
-           f"Replay Suite to create {string2} and review them now?\n\n"
-           "Press 'No' if you want to continue with the default settings "
-           f"(the necessary {string3} will be created on exit).")
+    msg = (f"You do not have a {string1}. Would you like to exit {TITLE} to "
+           f"create {string2} and review them now?\n\nPress 'No' if you want "
+           f"to continue with the default settings (the necessary {string3} "
+           "will be created on exit).")
 
     # ?-symbol, stay on top, Yes/No
     response = show_message('Missing config/menu files', msg, 0x00040024)
@@ -963,10 +969,10 @@ class AutoCutter:
             msg += (f"\n\nAny clips matching ShadowPlay's naming format will "
                     "be renamed to match your own `NAME_FORMAT` setting: "
                     f"\n\t\"{RENAME_FORMAT}\"")
-            msg += '\n\nClick cancel to exit Instant Replay Suite.'
+            msg += f'\n\nClick cancel to exit {TITLE}.'
 
             # ?-symbol, stay on top, Yes/No/Cancel
-            response = show_message('Welcome to Instant Replay Suite', msg, 0x00040023)
+            response = show_message('Welcome to ' + TITLE, msg, 0x00040023)
             if response == 2:       # Cancel/X
                 logging.info('Cancel selected on welcome dialog, closing...')
                 sys.exit(1)
@@ -1290,7 +1296,7 @@ class AutoCutter:
     # ---------------------
     def trim_clip(self, length, index=-1, patient=True):
         ''' Trims the clip at `index` down to the last `length` seconds. Clip
-            is edited in-place (the original is moved to `BACKUP_DIR`). '''
+            is edited in-place (the original is moved to `BACKUP_FOLDER`). '''
         try:
             clip = self.get_clip(index, verb='Trim', alert=length, min_clips=1, patient=patient)
             clip_path = clip.path
@@ -1526,7 +1532,7 @@ if __name__ == '__main__':
         def quit_tray(icon):
             ''' Quits pystray `icon`, saves history,
                 does final cleanup, and exits script. '''
-            logging.info('Closing system tray icon and exiting suite.')
+            logging.info('Closing system tray icon and exiting.')
             icon.visible = False
             icon.stop()
             tracemalloc.stop()
@@ -1725,7 +1731,7 @@ if __name__ == '__main__':
             )
 
         # create system tray icon
-        tray_icon = Icon(None, Image.open(ICON_PATH), 'Instant Replay Suite', tray_menu)
+        tray_icon = Icon(None, Image.open(ICON_PATH), f'{TITLE} {VERSION}', tray_menu)
 
         # cleanup *some* extraneous dictionaries/collections/functions
         del verify_ffmpeg
@@ -1760,6 +1766,6 @@ if __name__ == '__main__':
         tray_icon.run()
     except SystemExit: pass
     except:
-        logging.critical(f'(!) Error while initalizing Instant Replay Suite: {format_exc()}')
+        logging.critical(f'(!) Error while initalizing {TITLE}: {format_exc()}')
         play_alert('error')
         time.sleep(2.5)   # sleep to give error sound time to play
