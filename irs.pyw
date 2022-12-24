@@ -55,8 +55,6 @@ TODO pystray subclass improvements
 #  Settings
 #  Registry settings
 #  Other constants & paths
-#  Parsing tray menu file
-#  Path conflict warnings
 #  Custom Pystray class
 #  Custom keyboard listener
 #  Clip class
@@ -292,6 +290,7 @@ def verify_ffmpeg() -> None:
     ''' Checks if FFmpeg exists. If it isn't in the script's folder,
         the user's PATH system variable is checked. If still not found,
         a message box is displayed and the script exits. '''
+    logging.info('Verifying FFmpeg installation...')
     if exists('ffmpeg.exe'): return
     else:
         for path in os.environ.get('PATH', '').split(';'):
@@ -309,7 +308,36 @@ def verify_ffmpeg() -> None:
     sys.exit(3)
 
 
-def load_menu(path, comment_prefix='//'):
+def verify_config_files() -> None:
+    ''' Displays a message if config and/or menu file is missing, then gives
+        user the option to create them immediately and quit or to continue
+        with default settings and a default menu. '''
+    logging.info('Verifying config.settings and config.menu...')
+    if NO_CONFIG or NO_MENU:
+        if NO_CONFIG and NO_MENU: parts = ('config file or a menu file', 'them', 'files')
+        elif NO_CONFIG: parts = ('config file', 'it', 'file')
+        else: parts = ('menu file', 'it', 'file')
+        string1, string2, string3 = parts
+
+        msg = (f"You do not have a {string1}. Would you like to exit {TITLE} "
+               f"to create {string2} and review them now?\n\n"
+               "Press 'No' if you want to continue with the default settings "
+               f"(the necessary {string3} will be created on exit).")
+
+        # ?-symbol, stay on top, Yes/No
+        response = show_message('Missing config/menu files', msg, 0x00040024)
+        if response == 6:       # Yes
+            logging.info('Yes selected on missing config/menu dialog, closing...')
+            if NO_MENU:         # create AFTER dialog is closed to avoid confusion
+                restore_menu_file()
+            sys.exit(1)
+        elif response == 7:     # No
+            logging.info('No selected on missing config/menu dialog, using defaults.')
+            if NO_MENU:         # create AFTER dialog is closed to avoid confusion
+                restore_menu_file()
+
+
+def sanitize_json(path, comment_prefix='//'):
     ''' Reads a JSON file at `path`, but fixes common errors users may
         make, while allowing comments and value-only lines. Lines with
         `comment_prefix` are ignored. Designed for reading JSON files
@@ -352,7 +380,20 @@ def load_menu(path, comment_prefix='//'):
     return json.loads(json_string, object_pairs_hook=lambda pairs: pairs)
 
 
-def restore_menu_file():
+def load_menu() -> list:
+    ''' Parse menu at `CUSTOM_MENU_PATH` and warn/exit if parsing fails. '''
+    try: return sanitize_json(CUSTOM_MENU_PATH, '//')
+    except json.decoder.JSONDecodeError as error:
+        msg = ("Error while reading your custom menu file "
+               f"({CUSTOM_MENU_PATH}):\n\nJSONDecodeError - {error}"
+               "\n\nThe custom menu file follows JSON syntax. If you "
+               "need to reset your menu file, delete your existing "
+               f"one and restart {TITLE} to generate a fresh copy.")
+        show_message('Invalid Menu File', msg, 0x00040010)
+        sys.exit(2)                         # ^ X-symbol, stay on top
+
+
+def restore_menu_file() -> None:
     ''' Creates a fresh menu file at `CUSTOM_MENU_PATH`. '''
     logging.info(f'Creating fresh menu file at {CUSTOM_MENU_PATH}...')
     with open(CUSTOM_MENU_PATH, 'w') as file:
@@ -728,27 +769,8 @@ elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_FOLDER = pjoin(VIDEO_FOLDER, BACKUP_FO
 elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKUP_FOLDER)
 else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
 
-
-# -----------------------
-# Parsing tray menu file
-# -----------------------
-if not TRAY_ADVANCED_MODE: TRAY_ADVANCED_MODE_MENU = None
-else:   # parse menu file if it exists, and warn/exit if parsing fails
-    if not NO_MENU:
-        try: TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
-        except json.decoder.JSONDecodeError as error:
-            msg = ("Error while reading your custom menu file "
-                   f"({CUSTOM_MENU_PATH}):\n\nJSONDecodeError - {error}\n\n"
-                   "The custom menu file follows JSON syntax. If you need "
-                   "to reset your menu file, delete your existing one and "
-                   f"restart {TITLE} to generate a fresh copy.")
-            abort_launch(2, 'Invalid Menu File', msg)
-
-
-# -----------------------
-# Path conflict warnings
-# -----------------------
 # `VIDEO_FOLDER` and `BACKUP_FOLDER` must be on the same drive or we'll get OSError 17
+# if they are, warn user -> explain how to fix it -> abort launch
 if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
     or ismount(VIDEO_FOLDER) != ismount(BACKUP_FOLDER)):
 
@@ -758,41 +780,16 @@ if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
 
     drive = splitdrive(VIDEO_FOLDER)[0]
     msg = ("Your video folder and the path for saving temporary backups "
-           f"are not on the same drive. {TITLE} cannot backup and restore "
+           f"are on different drives. {TITLE} cannot backup and restore "
            "videos across drives without copying them back and forth.\n\n"
            f"Video folder: {VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}"
-           f"\n\nTo resolve this conflict, open \"{basename(CONFIG_PATH)}\" "
-           "and set `SAVE_BACKUPS_TO_VIDEO_FOLDER` to True or set "
+           f"\n\nTo resolve this conflict, open \"{basename(CONFIG_PATH)}"
+           "\" and set `SAVE_BACKUPS_TO_VIDEO_FOLDER` to True or set "
            f"`BACKUP_FOLDER` to an absolute path on the {drive} drive.")
     abort_launch(2, 'Invalid Backup Directory', msg, 0x00040030)  # !-symbol, stay on top
 
-# ensure `BACKUP_FOLDER` exists, but only once we've dealt with conflicts
+# ensure `BACKUP_FOLDER` exists, but only once we've dealt with drive-conflict
 if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
-
-# display warning if config and/or menu file is missing
-if NO_CONFIG or NO_MENU:
-    if NO_CONFIG and NO_MENU: parts = ('config file or a menu file', 'them', 'files')
-    elif NO_CONFIG: parts = ('config file', 'it', 'file')
-    else: parts = ('menu file', 'it', 'file')
-    string1, string2, string3 = parts
-
-    msg = (f"You do not have a {string1}. Would you like to exit {TITLE} to "
-           f"create {string2} and review them now?\n\nPress 'No' if you want "
-           f"to continue with the default settings (the necessary {string3} "
-           "will be created on exit).")
-
-    # ?-symbol, stay on top, Yes/No
-    response = show_message('Missing config/menu files', msg, 0x00040024)
-    if response == 6:       # Yes
-        logging.info('Yes selected on missing config/menu dialog, closing...')
-        if NO_MENU:         # create AFTER dialog is closed to avoid confusion
-            restore_menu_file()
-        sys.exit(1)
-    elif response == 7:     # No
-        logging.info('No selected on missing config/menu dialog, using defaults.')
-        if NO_MENU:         # create/read AFTER dialog is closed to avoid confusion
-            restore_menu_file()
-            TRAY_ADVANCED_MODE_MENU = load_menu(CUSTOM_MENU_PATH, '//')
 
 
 # ---------------------
@@ -1565,7 +1562,7 @@ if __name__ == '__main__':
     try:
         check_for_updates(manual=False)
         verify_ffmpeg()
-        logging.info('FFmpeg installation verified.')
+        verify_config_files()
 
         logging.info(f'Memory usage before initializing AutoCutter class: {get_memory():.2f}mb')
         cutter = AutoCutter()
@@ -1738,7 +1735,7 @@ if __name__ == '__main__':
                     except KeyError: logging.warning(f'(X) The following menu item does not exist: "{name}": "{action}"')
 
             tray_menu = [LEFT_CLICK_ACTION] if LEFT_CLICK_ACTION else []    # start with left-click action included, if present
-            evaluate_menu(TRAY_ADVANCED_MODE_MENU, tray_menu)               # recursively evaluate custom menu
+            evaluate_menu(load_menu(), tray_menu)                           # recursively evaluate custom menu
             if not exit_item_exists: tray_menu.append(pystray.MenuItem('Exit', quit_tray))  # add exit item if needed
 
         # creating menu -- "basic" mode
@@ -1784,6 +1781,8 @@ if __name__ == '__main__':
         # cleanup *some* extraneous dictionaries/collections/functions
         del abort_launch
         del verify_ffmpeg
+        del verify_config_files
+        del sanitize_json
         del load_menu
         del restore_menu_file
         del get_clip_tray_action
@@ -1791,7 +1790,6 @@ if __name__ == '__main__':
         del tray_menu
         del SEPARATOR
         del RECENT_CLIPS_BASE
-        del TRAY_ADVANCED_MODE_MENU
         del BACKUP_FOLDER_HINT
         del LENGTH_DICTIONARY
         del INSTANT_REPLAY_HOTKEY
