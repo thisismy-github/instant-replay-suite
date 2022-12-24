@@ -141,7 +141,7 @@ logging.basicConfig(
 get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
 
 
-def show_message(title, msg, flags=0x00040030):
+def show_message(title: str, msg: str, flags: int = 0x00040030):
     ''' Displays a MessageBoxW on the screen with a `title` and
         `msg`. Default `flags` are <!-symbol + stay on top>.
         https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw '''
@@ -236,9 +236,58 @@ def play_alert(sound: str) -> None:
         logging.warning('(!) Alert doesn\'t exist at path ' + path)
 
 
+def check_for_updates(manual: bool = True) -> None:
+    ''' Checks for updates and notifies user if one is found. If compiled,
+        user may download and install the update automatically, prompting
+        us to exit while it occurs. Also checks for `update_report.txt`,
+        left by a previous update. If `manual` is False, less cleanup is
+        done and if the `CHECK_FOR_UPDATES_ON_LAUNCH` setting is also
+        False, only the report is checked. '''
+
+    update_report = pjoin(CWD, 'update_report.txt')
+    update_report_exists = exists(update_report)
+    if manual or CHECK_FOR_UPDATES_ON_LAUNCH or update_report_exists:
+        import update
+
+        # set update constants here to avoid circular import
+        update.VERSION = VERSION
+        update.REPOSITORY_URL = REPOSITORY_URL
+        update.SCRIPT_PATH = SCRIPT_PATH
+        update.CWD = CWD
+        update.IS_COMPILED = IS_COMPILED
+        update.BIN_FOLDER = BIN_FOLDER
+        update.show_message = show_message
+        update.HYPERLINK = f'latest release on GitHub here:\n{REPOSITORY_URL}/releases/latest'
+
+        # validate previous update first if needed
+        if update_report_exists:
+            update.validate_update(update_report)
+
+        # check for updates and exit if we're installing a new version
+        if manual or CHECK_FOR_UPDATES_ON_LAUNCH:
+            if IS_COMPILED:             # if compiled, override cacert.pem path...
+                import certifi.core     # ...to get rid of a pointless folder
+                cacert_override_path = pjoin(BIN_FOLDER, 'cacert.pem')
+                os.environ["REQUESTS_CA_BUNDLE"] = cacert_override_path
+                certifi.core.where = lambda: cacert_override_path
+            exit_code = update.check_for_update()
+            if exit_code is not None:
+                if manual: quit_tray(tray_icon)
+                sys.exit(exit_code)
+
+
 # ---------------------
 # Temporary functions
 # ---------------------
+def abort_launch(code: int, title: str, msg: str, flags: int = 0x00040010) -> None:
+    ''' Checks for updates, then displays/logs a `msg` with `title` using
+        `flags`, then exits with exit code `code`. Default `flags` are
+        <X-symbol + stay on top>. Only to be used during launch. '''
+    check_for_updates(manual=False)
+    show_message(title, msg, flags)
+    sys.exit(code)
+
+
 def verify_ffmpeg() -> None:
     ''' Checks if FFmpeg exists. If it isn't in the script's folder,
         the user's PATH system variable is checked. If still not found,
@@ -327,7 +376,8 @@ def restore_menu_file():
 //    "concatenate_last_two": Concatenates your two most recent clips.
 //    "undo":                 Undoes the last trim or concatenation.
 //    "clear_history":        Clears your clip history.
-//    "update":               Manually checks for new clips and refreshes existing ones.
+//    "refresh":              Manually checks for new clips and refreshes existing ones.
+//    "check_for_updates":    Checks for a new release on GitHub to install.
 //    "quit":                 Exits this program.
 //
 // Special tray actions:
@@ -372,7 +422,7 @@ def restore_menu_file():
 \t"separator",
 \t"recent_clips",
 \t"separator",
-\t"Update clips": "update",
+\t"Update clips": "refresh",
 \t"Clear history": "clear_history",
 \t"Exit": "quit",
 }''')
@@ -435,6 +485,7 @@ DELETE_HOTKEY = cfg.load('DELETE', 'ctrl + alt + d')
 
 # --- Misc settings ---
 cfg.setSection(' --- General --- ')
+CHECK_FOR_UPDATES_ON_LAUNCH = cfg.load('CHECK_FOR_UPDATES_ON_LAUNCH', True)
 AUDIO = cfg.load('AUDIO', True)
 CHECK_FOR_NEW_CLIPS_ON_LAUNCH = cfg.load('CHECK_FOR_NEW_CLIPS_ON_LAUNCH', True)
 SEND_DELETED_FILES_TO_RECYCLE_BIN = cfg.load('SEND_DELETED_FILES_TO_RECYCLE_BIN', True)
@@ -529,7 +580,8 @@ cfg.comment('''Valid left-click and middle-click actions:
     'concatenate_last_two': Concatenates your two most recent clips.
     'undo':                 Undoes the last trim or concatenation.
     'clear_history':        Clears your clip history.
-    'update':               Manually checks for new clips/refreshes existing ones.
+    'refresh':              Manually checks for new clips/refreshes existing ones.
+    'check_for_updates':    Checks for a new release on GitHub to install.
     'quit':                 Exits this program.''', before='\n')
 TRAY_LEFT_CLICK_ACTION = cfg.load('LEFT_CLICK_ACTION', 'open_video_folder')
 TRAY_MIDDLE_CLICK_ACTION = cfg.load('MIDDLE_CLICK_ACTION', 'play_most_recent')
@@ -584,8 +636,7 @@ elif VIDEO_FOLDER is None:
     msg = ("ShadowPlay video path could not be read from your registry:\n\n"
            f"HKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\DefaultPathW."
            "\n\nPlease set `VIDEO_FOLDER_OVERRIDE` in your config file.")
-    show_message('No Video Folder Detected', msg, 0x00040010)   # X-symbol + stay on top
-    sys.exit(2)
+    abort_launch(2, 'No Video Folder Detected', msg)
 else: logging.info('Video directory: ' + VIDEO_FOLDER)
 
 
@@ -618,8 +669,7 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
                f"registry:\n\nHKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\"
                "DVRHKey___\n\nPlease set `INSTANT_REPLAY_HOTKEY_OVERRIDE` in "
                "your config file.\n\nFull error traceback: " + format_exc())
-        show_message('No Instant-Replay Hotkey Detected', msg, 0x00040010)
-        sys.exit(2)             # flags are X-symbol + stay on top ^
+        abort_launch(2, 'No Instant-Replay Hotkey Detected', msg)
 else: INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
 logging.info(f'Instant replay hotkey: "{INSTANT_REPLAY_HOTKEY}"')
 
@@ -670,8 +720,7 @@ if not exists(ICON_PATH):   # if icon does not exist, use secret backup
     if IS_COMPILED: ICON_PATH = pjoin(BIN_FOLDER, 'libico.dll')
     else:                   # if running from the script, warn and exit
         msg = 'No icon detected at `ICON_PATH`: ' + ICON_PATH
-        show_message('No icon detected', msg, 0x00040010)
-        sys.exit(3)
+        abort_launch(3, 'No icon detected', msg)
 
 # ensuring backup folder is valid
 if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
@@ -693,8 +742,7 @@ else:   # parse menu file if it exists, and warn/exit if parsing fails
                    "The custom menu file follows JSON syntax. If you need "
                    "to reset your menu file, delete your existing one and "
                    f"restart {TITLE} to generate a fresh copy.")
-            show_message('Invalid Menu File', msg)
-            sys.exit(2)
+            abort_launch(2, 'Invalid Menu File', msg)
 
 
 # -----------------------
@@ -716,9 +764,7 @@ if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
            f"\n\nTo resolve this conflict, open \"{basename(CONFIG_PATH)}\" "
            "and set `SAVE_BACKUPS_TO_VIDEO_FOLDER` to True or set "
            f"`BACKUP_FOLDER` to an absolute path on the {drive} drive.")
-
-    show_message('Invalid Backup Directory', msg)
-    sys.exit(2)
+    abort_launch(2, 'Invalid Backup Directory', msg, 0x00040030)  # !-symbol, stay on top
 
 # ensure `BACKUP_FOLDER` exists, but only once we've dealt with conflicts
 if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
@@ -1517,6 +1563,7 @@ class AutoCutter:
 ###########################################################
 if __name__ == '__main__':
     try:
+        check_for_updates(manual=False)
         verify_ffmpeg()
         logging.info('FFmpeg installation verified.')
 
@@ -1638,7 +1685,8 @@ if __name__ == '__main__':
             'delete_most_recent':   lambda: cutter.delete_clip(),               # small RAM drop by making these not lambdas
             'concatenate_last_two': lambda: cutter.concatenate_last_clips(),    # 26.0mb -> 25.8mb on average
             'clear_history':        lambda: cutter.last_clips.clear(),
-            'update':               lambda: cutter.check_for_clips(manual_update=True),
+            'refresh':              lambda: cutter.check_for_clips(manual_update=True),
+            'check_for_updates':    check_for_updates,
             'undo':                 cutter.undo,
             'quit':                 quit_tray,
         }
@@ -1734,6 +1782,7 @@ if __name__ == '__main__':
         tray_icon = Icon(None, Image.open(ICON_PATH), f'{TITLE} {VERSION}', tray_menu)
 
         # cleanup *some* extraneous dictionaries/collections/functions
+        del abort_launch
         del verify_ffmpeg
         del load_menu
         del restore_menu_file

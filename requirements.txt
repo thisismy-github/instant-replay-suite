@@ -1,5 +1,6 @@
 keyboard
 pymediainfo
 pystray
+requests
 send2trash
 win32-setctime
