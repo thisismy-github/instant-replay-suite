@@ -275,6 +275,30 @@ def check_for_updates(manual: bool = True) -> None:
                 sys.exit(exit_code)
 
 
+def about() -> None:
+    ''' Displays an "About" window with various information/statistics. '''
+    seconds_running = time.time() - SCRIPT_START_TIME
+    clip_count = len(cutter.last_clips)
+
+    if seconds_running < 60:
+        time_delta_string = 'Script has been running for less than a minute'
+    else:
+        d = seconds_running // 86400
+        h = seconds_running // 3600
+        m = seconds_running // 60
+
+        suffix = f'{m:g} minute{"s" if m != 1 else ""}'
+        if h: suffix = f'{h:g} hour{"s" if m != 1 else ""}, {suffix}'
+        if d: suffix = f'{d:g} day{"s" if m != 1 else ""}, {suffix}'
+        time_delta_string = 'Script has been running for ' + suffix
+
+    msg = (f'» {TITLE} v{VERSION} «\n{REPOSITORY_URL}\n\n---\n'
+           f'{time_delta_string}\nScript is tracking '
+           f'{clip_count} clip{"s" if clip_count != 1 else ""}'
+           '\n---\n\n© thisismy-github 2022-2023')
+    show_message('About ' + TITLE, msg, 0x00010040)  # i-symbol, set foreground
+
+
 # ---------------------
 # Temporary functions
 # ---------------------
@@ -420,6 +444,7 @@ def restore_menu_file() -> None:
 //    "clear_history":        Clears your clip history.
 //    "refresh":              Manually checks for new clips and refreshes existing ones.
 //    "check_for_updates":    Checks for a new release on GitHub to install.
+//    'about':                Shows an "About" window.
 //    "quit":                 Exits this program.
 //
 // Special tray actions:
@@ -455,6 +480,9 @@ def restore_menu_file() -> None:
 \t\t"Open root": "open_install_folder",
 \t\t"Open videos": "open_video_folder",
 \t\t"Open backups": "open_backup_folder",
+\t\t"separator",
+\t\t"Update check": "check_for_updates",
+\t\t"About...": "about",
 \t},
 \t"View log": "open_log",
 \t"separator",
@@ -464,7 +492,7 @@ def restore_menu_file() -> None:
 \t"separator",
 \t"recent_clips",
 \t"separator",
-\t"Update clips": "refresh",
+\t"Refresh clips": "refresh",
 \t"Clear history": "clear_history",
 \t"Exit": "quit",
 }''')
@@ -623,6 +651,7 @@ cfg.comment('''Valid left-click and middle-click actions:
     'clear_history':        Clears your clip history.
     'refresh':              Manually checks for new clips/refreshes existing ones.
     'check_for_updates':    Checks for a new release on GitHub to install.
+    'about':                Shows an "About" window.
     'quit':                 Exits this program.''', before='\n')
 TRAY_LEFT_CLICK_ACTION = cfg.load('LEFT_CLICK_ACTION', 'open_video_folder')
 TRAY_MIDDLE_CLICK_ACTION = cfg.load('MIDDLE_CLICK_ACTION', 'play_most_recent')
@@ -1726,6 +1755,7 @@ if __name__ == '__main__':
             'clear_history':        lambda: cutter.last_clips.clear(),
             'refresh':              lambda: cutter.check_for_clips(manual_update=True),
             'check_for_updates':    check_for_updates,
+            'about':                about,
             'undo':                 cutter.undo,
             'quit':                 quit_tray,
         }
