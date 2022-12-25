@@ -37,7 +37,7 @@ def get_later_version(version_a: str, version_b: str) -> str:
     return version_a if atuple > btuple else version_b
 
 
-def check_for_update(log: bool = True) -> None:
+def check_for_update(show_message_for_no_update: bool = False) -> None:
     ''' Checks GitHub for an update, and downloads it if requested by the
         user. Returns an exit code if we need to close for an incoming update.
 
@@ -107,7 +107,12 @@ def check_for_update(log: bool = True) -> None:
                 os.remove(lock_file)
 
         # otherwise, we must be up to date
-        elif log: logger.info('You\'re up to date!')
+        else:
+            msg = 'You\'re up to date!'
+            logger.info(msg)
+            if show_message_for_no_update:
+                show_message('No update found', msg, 0x00040040)  # i-symbol, stay on top
+
     except requests.exceptions.ConnectionError:
         logger.warning('(!) Update check was unable to reach GitHub (no internet connection?): ' + format_exc())
     except:

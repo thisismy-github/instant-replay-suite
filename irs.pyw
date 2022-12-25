@@ -144,7 +144,9 @@ def show_message(title: str, msg: str, flags: int = 0x00040030):
     ''' Displays a MessageBoxW on the screen with a `title` and
         `msg`. Default `flags` are <!-symbol + stay on top>.
         https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw '''
-    logging.info(f'Showing message box "{title}":\n\n---\n{msg}\n---\n')
+    top_line = f'--- {title} ---'
+    bottom_line = '-' * len(top_line)
+    logging.info(f'Showing message box:\n\n{top_line}\n{msg}\n{bottom_line}\n')
     return ctypes.windll.user32.MessageBoxW(None, msg, title, flags)
 
 
@@ -270,7 +272,7 @@ def check_for_updates(manual: bool = True) -> None:
                 cacert_override_path = pjoin(BIN_FOLDER, 'cacert.pem')
                 os.environ["REQUESTS_CA_BUNDLE"] = cacert_override_path
                 certifi.core.where = lambda: cacert_override_path
-            exit_code = update.check_for_update()
+            exit_code = update.check_for_update(manual)
             if exit_code is not None:
                 sys.exit(exit_code)
 
