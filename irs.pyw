@@ -5,6 +5,7 @@ import os                           # 0.10mb  / 13.45mb
 import sys                          # 0.125mb / 13.475mb
 import json
 import time                         # 0.125mb / 13.475mb
+import atexit
 import ctypes
 import logging                      # 0.65mb  / 14.00mb
 import subprocess                   # 0.125mb / 13.475mb
@@ -271,7 +272,6 @@ def check_for_updates(manual: bool = True) -> None:
                 certifi.core.where = lambda: cacert_override_path
             exit_code = update.check_for_update()
             if exit_code is not None:
-                if manual: quit_tray(tray_icon)
                 sys.exit(exit_code)
 
 
@@ -1647,17 +1647,22 @@ if __name__ == '__main__':
         def quit_tray(icon):
             ''' Quits pystray `icon`, saves history,
                 does final cleanup, and exits script. '''
-            logging.info('Closing system tray icon and exiting.')
-            icon.visible = False
-            icon.stop()
-            tracemalloc.stop()
+            try:                                # close icon and save history if icon exists
+                logging.info('Closing system tray icon and exiting.')
+                tracemalloc.stop()
+                icon.visible = False
+                icon.stop()
 
-            logging.info(f'Clip history: {cutter.last_clips}')
-            with open(HISTORY_PATH, 'w') as history:
-                history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
+                logging.info(f'Clip history: {cutter.last_clips}')
+                with open(HISTORY_PATH, 'w') as history:
+                    history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
+            except: pass
+
+            try: atexit.unregister(quit_tray)   # unregister quit_tray so we don't run it twice
+            except: pass
 
             try: sys.exit(0)
-            except SystemExit: pass         # avoid harmless yet annoying SystemExit error
+            except SystemExit: pass             # avoid harmless yet annoying SystemExit error
 
 
         def get_clip_tray_title(index: int, default: str = TRAY_RECENT_CLIP_DEFAULT_TEXT) -> str:
@@ -1850,6 +1855,9 @@ if __name__ == '__main__':
         # create system tray icon and manually assert that `ICON_PATH` is valid
         tray_icon = Icon(None, ICON_PATH, f'{TITLE} {VERSION}', tray_menu)
         tray_icon._assert_icon_handle()
+
+        # use atexit to register quit function so we always quit
+        atexit.register(quit_tray, tray_icon)
 
         # cleanup *some* extraneous dictionaries/collections/functions
         del abort_launch
