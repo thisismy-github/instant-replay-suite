@@ -108,6 +108,7 @@ CWD = dirname(SCRIPT_PATH)
 os.chdir(CWD)
 
 # other paths that will always be the same no matter what
+RESOURCE_FOLDER = pjoin(CWD, 'resources')
 BIN_FOLDER = pjoin(CWD, 'bin')
 APPDATA_FOLDER = pjoin(os.path.expandvars('%LOCALAPPDATA%'), TITLE)
 CONFIG_PATH = pjoin(CWD, 'config.settings.ini')
@@ -249,9 +250,10 @@ def check_for_updates(manual: bool = True) -> None:
         # set update constants here to avoid circular import
         update.VERSION = VERSION
         update.REPOSITORY_URL = REPOSITORY_URL
+        update.IS_COMPILED = IS_COMPILED
         update.SCRIPT_PATH = SCRIPT_PATH
         update.CWD = CWD
-        update.IS_COMPILED = IS_COMPILED
+        update.RESOURCE_FOLDER = RESOURCE_FOLDER
         update.BIN_FOLDER = BIN_FOLDER
         update.show_message = show_message
         update.HYPERLINK = f'latest release on GitHub here:\n{REPOSITORY_URL}/releases/latest'
@@ -574,7 +576,6 @@ else: GAME_ALIASES = {}
 cfg.setSection(' --- Paths --- ')
 ICON_PATH = cfg.load('CUSTOM_ICON')
 BACKUP_FOLDER = cfg.load('BACKUP_FOLDER', 'Backups')
-RESOURCE_FOLDER = cfg.load('RESOURCE_FOLDER', 'resources')
 HISTORY_PATH = cfg.load('HISTORY', 'history.txt')
 UNDO_LIST_PATH = cfg.load('UNDO_LIST', 'undo.txt')
 
@@ -745,7 +746,6 @@ TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT = '?recencyshort' in TRAY_RECENT_C
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
 
 # constructing paths for various files/folders
-RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
 if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
 else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, ICON_PATH)
 if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)

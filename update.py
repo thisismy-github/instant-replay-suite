@@ -15,9 +15,10 @@ from traceback import format_exc
     set these constants from within IRS itself to avoid circular imports. '''
 VERSION = None
 REPOSITORY_URL = None
+IS_COMPILED = None
 SCRIPT_PATH = None
 CWD = None
-IS_COMPILED = None
+RESOURCE_FOLDER = None
 BIN_FOLDER = None
 show_message = None
 
@@ -159,6 +160,25 @@ def download_update(latest_version: str, download_url: str, download_path: str, 
         logger.info(f'Copying updater-utility to temporary path ({active_updater_path})')
         shutil.copy2(original_updater_path, active_updater_path)
 
+        # mark edited/deleted resouces as ignored so they don't get replaced during the update
+        default_file = os.path.join(RESOURCE_FOLDER, '!defaults.txt')
+        edited = []
+        deleted = []
+        folder_name = os.path.basename(RESOURCE_FOLDER)
+        if os.path.exists(default_file):
+            with open(default_file, 'r') as defaults:
+                for line in defaults:
+                    line = line.strip()
+                    if line[:2] != '//':    # format is "<filename>: <size>"
+                        filename, expected_size = line.split(': ')
+                        path = os.path.join(RESOURCE_FOLDER, filename)
+                        if not os.path.exists(path):
+                            deleted.append(f'"{folder_name}/{filename}"')
+                        elif os.path.getsize(path) != int(expected_size):
+                            edited.append(f'"{folder_name}/{filename}"')
+        ignored = edited + deleted          # we handle both edits and deletes the same way, but this may change
+        logger.info(f'Ignoring edited resources: {ignored}')
+
         # run updater utility and close ourselves
         logger.info('Update-utility starting, main script closing...')
         add_to_report = f'"{VERSION.split()[0]} -> {latest_version}" "{active_updater_path}"'
@@ -166,6 +186,7 @@ def download_update(latest_version: str, download_url: str, download_path: str, 
                        f'--destination {CWD} '                      # the destination to unzip the file to
                        f'--cmd "{SCRIPT_PATH}" '                    # the command the updater should run to restart us
                        f'--lock-files "{lock_file}" '               # tell updater to wait for lock-file to be deleted
+                       f'--ignore {" ".join(ignored)} '             # tell updater not to extract these resource files
                        f'--add-to-report {add_to_report}')          # write versions and temp-updater's path in report
         logger.info('Update-utility command:\n\n' + updater_cmd.replace('--', '\n--'))
         subprocess.Popen(updater_cmd)
