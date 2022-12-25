@@ -29,7 +29,6 @@ tracemalloc.start()                 # start recording memory usage AFTER librari
 TODO extended backup system with more than 1 undo possible at a time
 TODO add stuff for multi-track recordings
 TODO show what "action" you can undo in the menu in some way (as a submenu?)
-TODO add dedicated config file, possibly separate file for defining tray menu
 TODO ability to auto-rename folders using same system as aliases
 TODO cropping ability -> pick crop region after saving instant replay OR before starting recording
         - have ability to pick region before (?) and after recording
@@ -354,30 +353,33 @@ def verify_config_files() -> None:
         # ?-symbol, stay on top, Yes/No
         response = show_message('Missing config/menu files', msg, 0x00040024)
         if response == 6:       # Yes
-            logging.info('Yes selected on missing config/menu dialog, closing...')
+            logging.info('"Yes" selected on missing config/menu dialog, closing...')
             if NO_MENU:         # create AFTER dialog is closed to avoid confusion
                 restore_menu_file()
             sys.exit(1)
         elif response == 7:     # No
-            logging.info('No selected on missing config/menu dialog, using defaults.')
+            logging.info('"No" selected on missing config/menu dialog, using defaults.')
             if NO_MENU:         # create AFTER dialog is closed to avoid confusion
                 restore_menu_file()
 
 
-def sanitize_json(path, comment_prefix='//'):
-    ''' Reads a JSON file at `path`, but fixes common errors users may
-        make, while allowing comments and value-only lines. Lines with
-        `comment_prefix` are ignored. Designed for reading JSON files
-        that are meant to be edited by users. '''
+def sanitize_json(path: str, comment_prefix: str = '//',
+                  allow_headless_lines: bool = True) -> list:
+    ''' Reads a JSON file at `path`, but fixes common errors/typos while
+        allowing comments and value-only lines (if `allow_headless_lines` is
+        True). Lines with `comment_prefix` are ignored. Returns the raw list
+        of key-value pairs before they're converted to a dictionary. Designed
+        for reading JSON files that are meant to be edited by users. '''
     with open(path, 'r') as file:
         striped = (line.strip() for line in file.readlines())
         raw_json_lines = (line for line in striped if line and line[:2] != comment_prefix)
 
     json_lines = []
     for line in raw_json_lines:
-        # allow value-only lines
-        if ':' not in line and line not in ('{', '}', '},'):
-            line = '"": ' + line
+        # allow lines that only have a value with no key
+        if allow_headless_lines:
+            if ':' not in line and line not in ('{', '}', '},'):
+                line = '"": ' + line
 
         # ensure all nested dictionaries have exactly one trailing comma
         line = line.replace('}', '},')
@@ -903,11 +905,11 @@ class Icon(pystray._win32.Icon):
                     handle = win32gui.CreateIconFromResource(resource, True)
                     if handle is None: raise
                     self._icon_handle = handle
-                    return logging.warning(f'Custom icon at {self._icon} was invalid. Using .exe\'s icon.')
+                    return logging.warning(f'Custom icon at "{self._icon}" was invalid. Using .exe\'s icon.')
                 except: logging.warning(f'.exe\'s icon at index {icon_index} was not valid.')
 
         # warn and exit. use f-string for warning in case `self._icon` isn't a string
-        msg = f'The icon at `CUSTOM_ICON` is not a valid .ICO file: {self._icon}'
+        msg = f'The icon at `CUSTOM_ICON` is not a valid .ICO file: "{self._icon}"'
         show_message('Invalid icon', msg, 0x00040010)
         quit_tray(self)
 
@@ -1099,12 +1101,12 @@ class AutoCutter:
             # ?-symbol, stay on top, Yes/No/Cancel
             response = show_message('Welcome to ' + TITLE, msg, 0x00040023)
             if response == 2:       # Cancel/X
-                logging.info('Cancel selected on welcome dialog, closing...')
+                logging.info('"Cancel" selected on welcome dialog, closing...')
                 sys.exit(1)
             elif response == 7:     # No
-                logging.info('No selected on welcome dialog, not retroactively adding clips.')
+                logging.info('"No" selected on welcome dialog, not retroactively adding clips.')
             elif response == 6:     # Yes
-                logging.info('Yes selected on welcome dialog, looking for pre-existing clips...')
+                logging.info('"Yes" selected on welcome dialog, looking for pre-existing clips...')
                 self.check_for_clips(manual_update=True, from_time=0)
 
     # --- hotkeys ---
