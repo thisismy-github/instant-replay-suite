@@ -132,5 +132,10 @@ dmypy.json
 
 # Instant Replay Suite
 testing
+executable/build
+executable/compiled
+resources/*.ico
+version_info*.txt
+history*.txt
+undo*.txt
 *.ini
-*.txt
