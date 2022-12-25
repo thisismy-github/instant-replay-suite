@@ -17,7 +17,6 @@ import pystray                      # 3.29mb  / 16.64mb
 import keyboard                     # 2.05mb  / 15.40mb
 import winsound                     # 0.21mb  / 13.56mb     ↓ https://stackoverflow.com/questions/3844430/how-to-get-the-duration-of-a-video-in-python
 import pymediainfo                  # 3.75mb  / 17.1mb      https://stackoverflow.com/questions/15041103/get-total-length-of-videos-in-a-particular-directory-in-python
-from PIL import Image               # 2.13mb  / 15.48mb
 from pystray._util import win32
 from win32_setctime import setctime
 from configparsebetter import ConfigParseBetter
@@ -573,11 +572,11 @@ else: GAME_ALIASES = {}
 
 # --- Paths ---
 cfg.setSection(' --- Paths --- ')
+ICON_PATH = cfg.load('CUSTOM_ICON')
 BACKUP_FOLDER = cfg.load('BACKUP_FOLDER', 'Backups')
 RESOURCE_FOLDER = cfg.load('RESOURCE_FOLDER', 'resources')
 HISTORY_PATH = cfg.load('HISTORY', 'history.txt')
 UNDO_LIST_PATH = cfg.load('UNDO_LIST', 'undo.txt')
-ICON_PATH = cfg.load('ICON', 'icon.ico')
 
 cfg.setSection(' --- Special Folders --- ')
 cfg.comment('''These only apply if the associated path
@@ -748,7 +747,7 @@ TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_F
 # constructing paths for various files/folders
 RESOURCE_FOLDER = abspath(RESOURCE_FOLDER)
 if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
-else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, 'icon.ico')
+else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, ICON_PATH)
 if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
@@ -757,11 +756,12 @@ else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER 
 # ensuring above paths are valid
 if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
 if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
-if not exists(ICON_PATH):   # if icon does not exist, use secret backup
-    if IS_COMPILED: ICON_PATH = pjoin(BIN_FOLDER, 'libico.dll')
-    else:                   # if running from the script, warn and exit
-        msg = 'No icon detected at `ICON_PATH`: ' + ICON_PATH
-        abort_launch(3, 'No icon detected', msg)
+
+# if icon isn't valid and we're running from the script -> warn and exit
+# (when compiled, the .exe's icon is used as the backup)
+if not IS_COMPILED and (not exists(ICON_PATH) or not os.path.isfile(ICON_PATH)):
+    msg = 'No icon detected at `CUSTOM_ICON`: ' + ICON_PATH
+    abort_launch(3, 'No icon detected', msg)
 
 # ensuring backup folder is valid
 if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
@@ -795,21 +795,27 @@ if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
 # ---------------------
 # Custom Pystray class
 # ---------------------
+WM_LBUTTONUP = 0x0202
+WM_RBUTTONUP = 0x0205
 WM_MBUTTONUP = 0x0208
 class Icon(pystray._win32.Icon):
-    ''' This subclass auto-updates the menu before opening,
-        allowing dynamic titles/actions to always be up-to-date,
-        and adds support for middle-clicks and custom menu alignments.
-        Full comments can be found in the original _win32.Icon class. '''
+    ''' This subclass auto-updates the menu before opening to allow dynamic
+        titles/actions to always be up-to-date, adds support for middle-clicks
+        and custom menu alignments, and allows icons to be passed as strings
+        rather than using `PIL.Image.Image` (removing it as a dependency by
+        just assuming a given .ICO is valid, and using the .exe's icon if it
+        isn't). See original _win32.Icon class for original comments. '''
+
     def _on_notify(self, wparam, lparam):
-        if lparam == win32.WM_LBUTTONUP:
+        ''' Adds auto-updating, middle-click, and menu alignment support. '''
+        if lparam == WM_LBUTTONUP:
             self()
 
         elif lparam == WM_MBUTTONUP:
             if MIDDLE_CLICK_ACTION:
                 MIDDLE_CLICK_ACTION()
 
-        elif self._menu_handle and lparam == win32.WM_RBUTTONUP:
+        elif self._menu_handle and lparam == WM_RBUTTONUP:
             self._update_menu()
 
             win32.SetForegroundWindow(self._hwnd)
@@ -828,6 +834,42 @@ class Icon(pystray._win32.Icon):
 
             if index > 0:
                 descriptors[index - 1](self)
+
+
+    def _assert_icon_handle(self):
+        ''' Removes usage of `serialized_image` context manager and thus the
+            the dependency on `PIL.Image.Image` by assuming `self._icon`
+            is the path to a valid .ICO file. Uses .exe's icon if needed. '''
+        if self._icon_handle: return
+        args = (win32.IMAGE_ICON, 0, 0, win32.LR_DEFAULTSIZE | win32.LR_LOADFROMFILE)
+
+        try:
+            handle = win32.LoadImage(None, self._icon, *args)
+            if handle is None: raise
+            self._icon_handle = handle
+            return
+        except:
+            if IS_COMPILED:             # if we're compiled, take the .exe's icon
+                try:
+                    # https://stackoverflow.com/questions/90775/how-do-you-load-an-embedded-icon-from-an-exe-file-with-pywin32
+                    import win32api     # these libraries cost almost nothing to import...
+                    import win32gui     # ...and don't add any files to our compilation
+
+                    # NOTE: for our current icon, index 4 is the best icon, even at different scales
+                    RT_ICON = 3         # this is so we don't need `win32con.RT_ICON`
+                    icon_index = 4
+
+                    resource = win32api.LoadResource(None, RT_ICON, icon_index)
+                    handle = win32gui.CreateIconFromResource(resource, True)
+                    if handle is None: raise
+                    self._icon_handle = handle
+                    return logging.warning(f'Custom icon at {self._icon} was invalid. Using .exe\'s icon.')
+                except: logging.warning(f'.exe\'s icon at index {icon_index} was not valid.')
+
+        # warn and exit. use f-string for warning in case `self._icon` isn't a string
+        msg = f'The icon at `CUSTOM_ICON` is not a valid .ICO file: {self._icon}'
+        show_message('Invalid icon', msg, 0x00040010)
+        sys.exit(3)
 
 
 # -------------------------
@@ -1775,8 +1817,9 @@ if __name__ == '__main__':
                 pystray.MenuItem('Exit', quit_tray)
             )
 
-        # create system tray icon
-        tray_icon = Icon(None, Image.open(ICON_PATH), f'{TITLE} {VERSION}', tray_menu)
+        # create system tray icon and manually assert that `ICON_PATH` is valid
+        tray_icon = Icon(None, ICON_PATH, f'{TITLE} {VERSION}', tray_menu)
+        tray_icon._assert_icon_handle()
 
         # cleanup *some* extraneous dictionaries/collections/functions
         del abort_launch
