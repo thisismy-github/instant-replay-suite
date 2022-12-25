@@ -172,16 +172,18 @@ def download_update(latest_version: str, download_url: str, download_path: str, 
         folder_name = os.path.basename(RESOURCE_FOLDER)
         if os.path.exists(default_file):
             with open(default_file, 'r') as defaults:
-                for line in defaults:
-                    line = line.strip()
-                    if line[:2] != '//':    # format is "<filename>: <size>"
-                        filename, expected_size = line.split(': ')
-                        path = os.path.join(RESOURCE_FOLDER, filename)
-                        if not os.path.exists(path):
-                            deleted.append(f'"{folder_name}/{filename}"')
-                        elif os.path.getsize(path) != int(expected_size):
-                            edited.append(f'"{folder_name}/{filename}"')
-        ignored = edited + deleted          # we handle both edits and deletes the same way, but this may change
+                for line in defaults:   # format is "<filename>: <size>"
+                    try:
+                        line = line.strip()
+                        if line and line[:2] != '//':
+                            filename, expected_size = line.split(': ')
+                            path = os.path.join(RESOURCE_FOLDER, filename)
+                            if not os.path.exists(path):
+                                deleted.append(f'"{folder_name}/{filename}"')
+                            elif os.path.getsize(path) != int(expected_size):
+                                edited.append(f'"{folder_name}/{filename}"')
+                    except: pass
+        ignored = edited + deleted      # we handle both edits and deletes the same way, but this may change
         logger.info(f'Ignoring edited resources: {ignored}')
 
         # run updater utility and close ourselves
