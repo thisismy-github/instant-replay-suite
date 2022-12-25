@@ -602,7 +602,7 @@ else: GAME_ALIASES = {}
 
 # --- Paths ---
 cfg.setSection(' --- Paths --- ')
-ICON_PATH = cfg.load('CUSTOM_ICON')
+ICON_PATH = cfg.load('CUSTOM_ICON', '' if IS_COMPILED else 'executable\\icon_main.ico')
 BACKUP_FOLDER = cfg.load('BACKUP_FOLDER', 'Backups')
 HISTORY_PATH = cfg.load('HISTORY', 'history.txt')
 UNDO_LIST_PATH = cfg.load('UNDO_LIST', 'undo.txt')
@@ -774,9 +774,7 @@ TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY = '?recency' in TRAY_RECENT_CLIP_NAME_F
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT = '?recencyshort' in TRAY_RECENT_CLIP_NAME_FORMAT
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
 
-# constructing paths for various files/folders
-if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
-else: ICON_PATH = pjoin(RESOURCE_FOLDER if exists(RESOURCE_FOLDER) else CWD, ICON_PATH)
+# constructing paths for misc files
 if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
@@ -785,6 +783,17 @@ else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER 
 # ensuring above paths are valid
 if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
 if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
+
+# constructing icon path -> first try resource folder, then CWD
+# NOTE: pystray won't use our .exe icon if `ICON_PATH` is empty/None
+if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
+elif ICON_PATH:
+    new_path = pjoin(RESOURCE_FOLDER, ICON_PATH)
+    if not exists(new_path):
+        new_path = pjoin(CWD, ICON_PATH)
+    ICON_PATH = new_path
+elif IS_COMPILED:
+    ICON_PATH = '?'
 
 # if icon isn't valid and we're running from the script -> warn and exit
 # (when compiled, the .exe's icon is used as the backup)
@@ -898,7 +907,7 @@ class Icon(pystray._win32.Icon):
         # warn and exit. use f-string for warning in case `self._icon` isn't a string
         msg = f'The icon at `CUSTOM_ICON` is not a valid .ICO file: {self._icon}'
         show_message('Invalid icon', msg, 0x00040010)
-        sys.exit(3)
+        quit_tray(self)
 
 
 # -------------------------
@@ -1852,9 +1861,8 @@ if __name__ == '__main__':
                 pystray.MenuItem('Exit', quit_tray)
             )
 
-        # create system tray icon and manually assert that `ICON_PATH` is valid
+        # create system tray icon
         tray_icon = Icon(None, ICON_PATH, f'{TITLE} {VERSION}', tray_menu)
-        tray_icon._assert_icon_handle()
 
         # use atexit to register quit function so we always quit
         atexit.register(quit_tray, tray_icon)
