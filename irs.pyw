@@ -523,10 +523,10 @@ BACKUP_FOLDER_HINT = (VIDEO_FOLDER and (splitdrive(VIDEO_FOLDER)[0] != splitdriv
 # ---------------------
 # Settings
 # ---------------------
+config_read_start = time.time()
 cfg = ConfigParseBetter(
     CONFIG_PATH,
     caseSensitive=True,
-    autosaveOnlyWhenFileDoesNotExist=True,
     comment_prefixes=('//',)
 )
 
@@ -606,10 +606,10 @@ else: GAME_ALIASES = {}
 
 # --- Paths ---
 cfg.setSection(' --- Paths --- ')
-ICON_PATH = cfg.load('CUSTOM_ICON', '' if IS_COMPILED else 'executable\\icon_main.ico')
-BACKUP_FOLDER = cfg.load('BACKUP_FOLDER', 'Backups')
-HISTORY_PATH = cfg.load('HISTORY', 'history.txt')
-UNDO_LIST_PATH = cfg.load('UNDO_LIST', 'undo.txt')
+ICON_PATH = cfg.load('CUSTOM_ICON', '' if IS_COMPILED else 'executable\\icon_main.ico', remove='"')
+BACKUP_FOLDER = cfg.load('BACKUP_FOLDER', 'Backups', remove='"')
+HISTORY_PATH = cfg.load('HISTORY', 'history.txt', remove='"')
+UNDO_LIST_PATH = cfg.load('UNDO_LIST', 'undo.txt', remove='"')
 
 cfg.setSection(' --- Special Folders --- ')
 cfg.comment('''These only apply if the associated path
@@ -697,6 +697,9 @@ cfg.comment('Used for overriding values obtained from the registry.')
 VIDEO_FOLDER_OVERRIDE = cfg.load('VIDEO_FOLDER_OVERRIDE')
 INSTANT_REPLAY_HOTKEY_OVERRIDE = cfg.load('INSTANT_REPLAY_HOTKEY_OVERRIDE')
 TRAY_ALIGN_CENTER = cfg.load('ALWAYS_CENTER_ALIGN_TRAY_MENU_ON_OPEN', False)
+
+# --- Log config reading duration ---
+logging.info(f'Config read in {time.time() - config_read_start:.3f} seconds.')
 
 
 # -----------------------

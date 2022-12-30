@@ -32,12 +32,25 @@ New for Instant-Replay-Suite:
     -edited configparser-related parameters for clarity
     -deleted a lot of comments/commented out code
     -remade/refactored most attribute-based magic methods
+    -added `KEY_ORDER` for strict ordering while writing
+    -added `noInterpolation` and `extendedInterpolation` parameters
 
+New for chatGPT-vidgen:
+    -added `remove` load parameter
+    -improved consistency of loading and writing iterables
+    -`autosave` parameter is now saved to `__autosave`
+    -improved ConfigParseBetterQt
+        -added QFontComboBox support
+        -added `subclasses` dictionary parameter
+        -added `autosave` parameter to `write()` and `loadQt()`
+            -determines whether or not `__widgets` will be used
+            -if None, `__autosave` is used
 
+TODO: % and $ interpolation do not actually need to be escaped. fix this in configparser's classes
+TODO: main.cfg.lastdir (without load()) -> "AttributeError: 'NoneType' object has no attribute 'section'"
 TODO: case sensitive attribute errors should be clearer
 TODO: deal with endless name conflicts (remember, settings are part of __dict__)
 TODO: add setting for deleting empty sections on write
-TODO: % must be escaped by doing %%. is this because of the configparser class being used? i think we solved this before
 TODO: __getattribute__ and __getattr__ should directly call configparser methods
 TODO: load() should be able to take callbacks (like 'topleft' to Position.TopLeft in battery.py)
 TODO: .load() -> 5.6 sec/million
@@ -89,7 +102,6 @@ From main.pyw:
                 - Proxies are no longer mutable in the reasonable sense (UNFIXABLE)
                 - People who want to access the proxies themselves must use alternate methods
                     like .copy() or .proxy() or .get() or some other garbage
-    - Deal with % signs. Somehow. https://stackoverflow.com/questions/46156125/how-to-use-signs-in-configparser-python
     - val_type to just type?
     - delimiter_type to list/tuple as default?
     - what is delimiter_type in save()?
@@ -115,9 +127,13 @@ logger = logging.getLogger('CPB')
 GENERATOR_TYPE = type(_ for _ in ())
 ITER_TYPES = (GENERATOR_TYPE, list, tuple, set)
 CAST_TYPES = (int, float)
-NEWLINES_BETWEEN_SECTIONS = 2
 BOOLEAN_STATES = configparser.RawConfigParser.BOOLEAN_STATES
 
+# TODO: global KEY_ORDER vs. property (global means order can break with multiple parsers running, but who does that?)
+# TODO: should we ALWAYS assume users will only make one parser? maybe have a subclass for allowing multiple?
+NEWLINES_BETWEEN_SECTIONS = 2
+KEY_ORDER = []
+_append_to_key_order = KEY_ORDER.append
 
 
 def _write_section(self, fp, section_name, section_items, delimiter):
@@ -128,10 +144,16 @@ def _write_section(self, fp, section_name, section_items, delimiter):
     comment_prefix = comment_prefixes[0] if comment_prefixes else False
     interpolate_before = self._interpolation.before_write
     allow_no_value = self._allow_no_value
+    get_order_index = KEY_ORDER.index
 
     fp.write(f'[{section_name}]\n')
     #print('\nWRITING SECTION:', section_name, section_items)
-    for key, value in section_items:
+
+    def align_to_order(pair):
+        try: return get_order_index(section_name + pair[0])
+        except: return len(section_items)
+
+    for key, value in sorted(section_items, key=align_to_order):
         value = interpolate_before(self, section_name, key, value)
         try: is_comment = key.lstrip()[:len(comment_prefix)] == comment_prefix
         except: is_comment = False
@@ -275,7 +297,9 @@ class _ConfigParseBetter:
                  lowMemoryMode=False, autosaveCallback=True,
                  autosaveOnlyWhenFileDoesNotExist=False,
                  optionFormatCallback=None,
-                 encoding=None, **parserkwargs):
+                 encoding=None, noInterpolation=False,
+                 extendedInterpolation=True, **parserkwargs):
+        self.__autosave = autosave      # currently only used in ConfigParseBetterQt
         self.__sectionLock = sectionLock
         self.__caseSensitive = caseSensitive
         #self.__errorForMissingFallbacks = True  # TODO unused
@@ -290,8 +314,14 @@ class _ConfigParseBetter:
         #self.__locked = tuple(self.__dict__.keys())     # TODO unused (use soon)
         #print(self.__locked, end='\n\n')
 
-        if parser is None: parser = configparser.ConfigParser(**parserkwargs)
+        # add default parser if none is given, with specified interpolation
+        if parser is None:
+            if noInterpolation: interpolation = configparser.BasicInterpolation()
+            elif extendedInterpolation: interpolation = configparser.ExtendedInterpolation()
+            else: interpolation = configparser._UNSET
+            parser = configparser.ConfigParser(interpolation=interpolation, **parserkwargs)
         self.__parser = parser
+        #parser.parent = self                    # allow parser to reference us
 
         # `optionxform` is normally used for lowering option names before
         # working on them. If `caseSensitive` is True, we don't want this.
@@ -304,6 +334,9 @@ class _ConfigParseBetter:
         if section: self.__section = section
         else: self.__section = 'general'        # TODO i need to understand the DEFAULTS section better
 
+        # TODO this needs to be improved (in general)
+        # TODO warn user if self.read returns 0 read files
+        # TODO override RawConfigParser.read() for better error handling?
         self.__filepath = filepath
         if not filepath:
             if sys.argv[0]:
@@ -366,7 +399,7 @@ class _ConfigParseBetter:
             appdatapath = os.path.expandvars('%LOCALAPPDATA%')
             if not path.lower().startswith(appdatapath.lower()):
                 path = os.path.join(appdatapath, path)
-        dirs, name = os.path.dirname(path), os.path.basename(path)
+        dirs, name = os.path.split(path)
         if dirs and not os.path.exists(dirs):
             os.makedirs(dirs)
         if name[-4:] not in ('.ini', '.cfg'):
@@ -378,7 +411,7 @@ class _ConfigParseBetter:
         if setSection is not None: self.setSection(setSection)
         filepath = filepath or self.__filepath
         encoding = kwargs.get('encoding', self.__encoding)
-        self.__parser.read(filepath, encoding=encoding)
+        return self.__parser.read(filepath, encoding=encoding)
 
 
     def write(self, filepath=None, mode='w',
@@ -439,22 +472,23 @@ class _ConfigParseBetter:
         #with open(path, 'w') as configfile: self.__parser.write(configfile)
 
 
-    def refresh(self, newParser=None, autoread=True, encoding=None, **parserkwargs):
-        ''' Deletes/replaces an old configparser object with a new one. '''
-        oldSection = self.__dict__['_ConfigParseBetter__section'].name
-        del self.__parser
-        self.__parser = newParser or configparser.ConfigParser(**parserkwargs)  # TODO add the % thing here?
-        if autoread:
-            encoding = encoding or self.__encoding
-            self.read(self.__filepath, encoding=encoding)
-        self.setSection(oldSection)   # restore previous section, if possible
+    #def refresh(self, newParser=None, autoread=True, encoding=None, **parserkwargs):
+    #    ''' Deletes/replaces an old configparser object with a new one. '''
+    #    oldSection = self.__dict__['_ConfigParseBetter__section'].name
+    #    del self.__parser
+    #    self.__parser = newParser or configparser.ConfigParser(**parserkwargs)
+    #    if autoread:
+    #        encoding = encoding or self.__encoding
+    #        self.read(self.__filepath, encoding=encoding)
+    #    self.setSection(oldSection)   # restore previous section, if possible
 
 
-    def reset(self, newParser=None, autoread=True, encoding=None, **parserkwargs):
+    #def reset(self, newParser=None, autoread=True, encoding=None, **parserkwargs):
+    def reset(self):
         for key in self.__dict__:
             if key[:18] != '_ConfigParseBetter':
                 del self.__dict__[key]
-        self.refresh(newParser, autoread, encoding, **parserkwargs)
+        #self.refresh(newParser, autoread, encoding, **parserkwargs)
 
 
     def comment(self, comment='', before='', after='', section=None):
@@ -479,18 +513,26 @@ class _ConfigParseBetter:
         comment = before + prefix + multiline_prefix.join(lines) + after
         self.__parser._sections[section.name][comment] = None
 
+        # add comment to our key order so we remember its position
+        order_key = section.name + comment
+        if order_key not in KEY_ORDER:
+            _append_to_key_order(order_key)
 
+
+    # TODO: using an iterable fallback with a custom delimiter should not be allowed (too complicated for now)
+    #       - when implemented, it should detect/set appropriate params -> delimiter, val_type. but it's more involved than that
     def load(self, key, fallback='', delimiter=None,        # TODO should delimiter_type and val_type switch places?
              val_type=None, delimiter_type=None,
              fallback_align=True, force_delimiter_type=True,
              min_len=None, max_len=None, fill_with_defaults=False,
              fill_with_fallback=False, default=None,
-             aliases=None, section=None):
+             aliases=None, remove='', section=None):
 
-        if isinstance(fallback, type):          # fallback is a literal type, like "fallback=int"
+        # get fallback's type and verify fallback's actual value
+        if isinstance(fallback, type):      # check if fallback is a literal type, like "fallback=int"
             fallback_type = fallback
-            #fallback = fallback()               # get default value for that type (i.e. int() = 0)
-            fallback = ''                       # TODO why was this needed? _empty_fallback (below)?
+            #fallback = fallback()          # get default value for that type (i.e. int() = 0)
+            fallback = ''                   # TODO why was this needed? _empty_fallback (below)?
             if val_type is None:
                 val_type = fallback_type
         else:
@@ -505,7 +547,14 @@ class _ConfigParseBetter:
         # TODO This block here was originally a separate function called _load, but it's been moved here for optimization
         if key[:3] == '__': raise LockedNameException(key)
         section = self.getSection(section)
-        if section.name in self.__getRawParserSections():
+        section_name = section.name
+
+        # add key to our key order so we remember its position
+        order_key = section_name + key
+        if order_key not in KEY_ORDER:
+            _append_to_key_order(order_key)
+
+        if section_name in self.__getRawParserSections():
             try:
                 value = section.get(key, fallback=fallback)
                 if fallback_type == bool:           # getboolean
@@ -519,7 +568,21 @@ class _ConfigParseBetter:
         else:
             value = fallback    # TODO add elif for raising error here?
 
-        section[key] = str(value).replace('%', '%%')   # 1.0595 sec/million TODO these % signs are for a nightmare https://stackoverflow.com/questions/46156125/how-to-use-signs-in-configparser-python
+        #print('Value before setting within parser:', key, value, type(value))
+
+        # TODO string conversion should probably happen when we do .get() above
+        # set the actual RawConfigParser section value (RawConfigParser.set())
+        # convert iterable values to string and convert back later to cover most edge-cases
+        if not fallback_is_iterable: parser_value = str(value)
+        else: parser_value = value = str(value).strip('()[]{}')
+        for char in remove: parser_value = value = value.replace(char, '')
+        #if strip: parser_value = value = value.strip(strip)
+        #elif lstrip: parser_value = value = value.lstrip(lstrip)
+        #elif rstrip: parser_value = value = value.rstrip(rstrip)
+
+        # TODO this eventually results in __parser.get(), right? why not just use that
+        #section[key] = parser_value.replace('%', '%%')   # 1.0595 sec/million TODO these % signs are for a nightmare https://stackoverflow.com/questions/46156125/how-to-use-signs-in-configparser-python
+        section[key] = parser_value
         logger.debug(f'Loading: key={key} -> value={value} ({type(value)}) | fallback={fallback} delim={delimiter} val_type={val_type} delim_type={delimiter_type}')
 
         #try:                                   # TODO throw more errors here
@@ -528,6 +591,8 @@ class _ConfigParseBetter:
         else: true_value = value
         #key = key.lower()
         #print('true_value:', true_value)
+
+        # there is nothing for us to actually write -> cleanup and return early
         if not true_value and not fallback and delimiter_type is None and true_value == fallback:
             #print('not true_value and not fallback and true_value == fallback')
             #key = key.lower()
@@ -769,8 +834,8 @@ class _ConfigParseBetter:
                 values = values[0]
 
         section = self.getSection(section)
-        valueStr = delimiter.join(str(v).replace('%', '%%') for v in values)    # TODO more % stuff
-        #valueStr = delimiter.join(str(v) for v in values)                      # <- original
+        #valueStr = delimiter.join(str(v).replace('%', '%%') for v in values)    # TODO more % stuff
+        valueStr = delimiter.join(str(v) for v in values)                      # <- original
         #section[key] = valueStr     # TODO do time test here
         self.__parser.set(section.name, key, valueStr)
         if delimiter_type is None:
@@ -975,7 +1040,10 @@ class _ConfigParseBetter:
 
             section = self.__dict__[name].section.name
             self.__parser.set(section, name, casted_value)
-            self.__dict__[name.lower()].set(value)    # this is OptionProxy.set (I think)
+
+            # FIXME casesensitive? (cfg.UNDO_LIST = 'whatever')
+            #self.__dict__[name.lower()].set(value)    # this is OptionProxy.set (I think)
+            self.__dict__[name].set(value)    # this is OptionProxy.set (I think)
             #self.save(name, value)                   # TODO for autowriting after saves
         else: self.__dict__[name] = value
 
@@ -1009,7 +1077,7 @@ class _ConfigParseBetter:
             except KeyError: pass
         if name in self.__getRawParserSections(): value = BetterSectionProxy(self, name)
         else: value = self._loadFromAnywhere(key=name, fallback=None)
-        self.__dict__[name.lower()] = value
+        self.__dict__[name.lower()] = value     # FIXME is this casesensitive?
         return value
 
 
@@ -1066,41 +1134,55 @@ class ConfigParseBetter(_ConfigParseBetter):
 class ConfigParseBetterQt(ConfigParseBetter):   # TODO support Pyside and other PyQt versions
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)       # TODO check typical ram usage of autosave feature
-        self.__widgets = [] if self._ConfigParseBetter__autosave else None  # https://stackoverflow.com/questions/47019802/inheriting-class-attribute-with-double-underscore
+        self.__widgets = []
 
 
-    def write(self, *args, **kwargs):
-        logger.debug(f'Writing ConfigParseBetterQt config ({len(self.__widgets)} widgets saved).')
-        if self._ConfigParseBetter__autosave:   # autosave widgets with their parameters before writing
+    def write(self, *args, autosave=None, **kwargs):
+        if autosave is None: autosave = self._ConfigParseBetter__autosave
+        if autosave and self.__widgets:         # autosave widgets with their parameters before writing
+            logger.debug(f'Writing ConfigParseBetterQt config ({len(self.__widgets)} widgets saved).')
             for parameters in reversed(self.__widgets):
                 self.saveQt(
-                    *parameters[0],
-                    children=parameters[-6],
-                    recursive=parameters[-5],
-                    ignore=parameters[-4],
-                    extraWidgets=parameters[-3],
+                    *parameters[0],             # index 0 is *widgets
+                    children=parameters[-7],
+                    recursive=parameters[-6],
+                    ignore=parameters[-5],
+                    extraWidgets=parameters[-4],
+                    subclasses=parameters[-3],
                     getComboText=parameters[-2],
                     section=parameters[-1]
                 )
         super().write(*args, **kwargs)          # write normally
 
 
-    def loadQt(self, *widgets, children=True, recursive=True, ignore=tuple(), extraWidgets={}, getComboText=False, section=None):
-        from PyQt5.QtWidgets import QCheckBox, QLineEdit, QSlider, QDial, QComboBox, \
-            QRadioButton, QPushButton, QSpinBox, QDoubleSpinBox, QGroupBox, QKeySequenceEdit
-        from PyQt5.QtGui import QKeySequence
+    def loadQt(self, *widgets, children=True, recursive=True,
+               ignore=tuple(), extraWidgets={}, subclasses={},
+               getComboText=False, autosave=None, section=None):
+        from PyQt5.QtWidgets import QCheckBox, QLineEdit, QSlider, QDial, \
+            QComboBox, QFontComboBox, QRadioButton, QPushButton, QSpinBox, \
+            QDoubleSpinBox, QGroupBox, QKeySequenceEdit
+        from PyQt5.QtGui import QKeySequence, QFont
+
         if type(ignore) not in ITER_TYPES: ignore = (ignore,)    # ensure ignore parameter is an array
-        section = self.getSection(section)
-        if self._ConfigParseBetter__autosave:   # remember widget and parameters for autosaving later
-            self.__widgets.append((widgets, children, recursive, ignore, extraWidgets, getComboText, section))
         logger.debug(f'Loading Qt values from {len(widgets)} widget(s)')
+        section = self.getSection(section)
+
+        # https://stackoverflow.com/questions/47019802/inheriting-class-attribute-with-double-underscore
+        #if self._ConfigParseBetter__autosave:   # remember widget and parameters for autosaving later
+        #    self.__widgets.append((widgets, children, recursive, ignore, extraWidgets, subclasses, getComboText, section))
+        if autosave is None: autosave = self._ConfigParseBetter__autosave
+        if autosave: self.__widgets.append((widgets, children, recursive, ignore, extraWidgets, subclasses, getComboText, section))
 
         # checkable qactions, font-combobox, datetime
+        def actionCheckBox(widget, name):       # not really worth shoving into a lambda
+            if not widget.isCheckable(): return
+            if not widget.isTristate(): widget.setChecked(self.load(name, widget.isChecked(), section=section))
+            else: widget.setCheckState(self.load(name, int(widget.checkState()), section=section))
 
-        def actionCheckBox(check, name):        # not really worth shoving into a lambda
-            if not check.isCheckable(): return
-            if not check.isTristate(): check.setChecked(self.load(name, check.isChecked(), section=section))
-            else: check.setCheckState(self.load(name, int(check.checkState()), section=section))
+        def actionFontComboBox(widget, name):   # fromString doesn't return a new QFont
+            font = QFont()
+            font.fromString(self.load(name, widget.currentFont().toString(), section=section))
+            widget.setCurrentFont(font)
 
         actionValue = lambda w, name: w.setValue(self.load(name, w.value(), section=section))
         actionCheck = lambda w, name: w.setChecked(self.load(name, w.isChecked(), section=section)) if w.isCheckable() else None
@@ -1113,54 +1195,76 @@ class ConfigParseBetterQt(ConfigParseBetter):   # TODO support Pyside and other 
             QGroupBox:        actionCheck,
             QPushButton:      actionCheck,
             QCheckBox:        actionCheckBox,
+            QFontComboBox:    actionFontComboBox,
             QLineEdit:        lambda w, name: w.setText(self.load(name, w.text(), section=section)),
             QKeySequenceEdit: lambda w, name: w.setKeySequence(QKeySequence.fromString(self.load(name, w.keySequence().toString(), section=section))),
             QComboBox:        (lambda w, name: w.setCurrentText(self.load(name, w.currentText(), section=section))
                                if getComboText else w.setCurrentIndex(self.load(name, w.currentIndex(), section=section)))
         }
 
-        _ignore = []                        # the true ignore list
+        # create true ignore list
+        _ignore = []
         for widget_type in ignore:
             if widget_type in actions: del actions[widget_type]
             elif not isinstance(widget_type, str): _ignore.append(widget_type.objectName())
             else: _ignore.append(widget_type)
+
+        # add extraWidgets -> {widgetType: (name_of_getter_attribute, name_of_setter_attribute)}
+        # workaround for a Python bug/oddity involving creating lambdas in iterables
+        def get_getter_and_setter(getter, setter):
+            return lambda w, name: (getattr(w, setter)(
+                self.load(name, getattr(w, getter)(), section=section)))
         for widget_type, (getter, setter) in extraWidgets.items():
-            actions[widget_type] = lambda w, name: (getattr(w, setter)(
-                self.load(name, getattr(w, getter)(), section=section))
-            )
+            actions[widget_type] = get_getter_and_setter(getter, setter)
+
+        # redirect subclasses to parent's action
+        for subclass, parent in subclasses.items():
+            if parent in actions:
+                actions[subclass] = actions[parent]
 
         def getWidget(widget, ignore):      # gets and loads a single widget
-            if widget in ignore: return
+            if widget in ignore:
+                return
             name = widget.objectName()
-            if name[:3] == 'qt_' or not name or name in ignore: return                  # ignore qt_ prefixes -> special qt things
+            if name[:3] == 'qt_' or not name or name in ignore:
+                return                      # ignore qt_ prefixes -> special qt things
             widget_type = type(widget)
-            if widget_type in actions: actions[widget_type](widget, name)
+            if widget_type in actions:
+                actions[widget_type](widget, name)
 
         def getChildren(widget, ignore):    # like getWidget, but recursive. defined separately for performance optimization
             for child in widget.children():
-                if child in ignore: continue
+                if child in ignore:
+                    continue
                 name = child.objectName()
-                if name[:3] == 'qt_' or not name or name in ignore: continue            # ignore qt_ prefixes -> special qt things
+                if name[:3] == 'qt_' or not name or name in ignore:
+                    continue                # ignore qt_ prefixes -> special qt things
                 widget_type = type(child)
-                if widget_type in actions: actions[widget_type](child, name)
+                if widget_type in actions:
+                    actions[widget_type](child, name)
                 getChildren(child, ignore)
 
         for widget in widgets:
             getWidget(widget, _ignore)
             if children:
-                if recursive: getChildren(widget, _ignore)
+                if recursive:
+                    getChildren(widget, _ignore)
                 else:
                     for child in widget.children():
-                        if child in _ignore: continue
+                        if child in _ignore:
+                            continue
                         name = child.objectName()
-                        if name[:3] == 'qt_' or not name or name in _ignore: continue   # ignore qt_ prefixes -> special qt things
+                        if name[:3] == 'qt_' or not name or name in _ignore:
+                            continue   # ignore qt_ prefixes -> special qt things
                         widget_type = type(child)
-                        if widget_type in actions: actions[widget_type](child, name)
+                        if widget_type in actions:
+                            actions[widget_type](child, name)
 
 
-    def saveQt(self, *widgets, children=True, recursive=True, ignore=tuple(), extraWidgets={}, getComboText=False, section=None):
-        from PyQt5.QtWidgets import QCheckBox, QLineEdit, QSlider, QDial, QComboBox, \
-            QRadioButton, QPushButton, QSpinBox, QDoubleSpinBox, QGroupBox, QKeySequenceEdit
+    def saveQt(self, *widgets, children=True, recursive=True, ignore=tuple(), extraWidgets={}, subclasses={}, getComboText=False, section=None):
+        from PyQt5.QtWidgets import QCheckBox, QLineEdit, QSlider, QDial, \
+            QComboBox, QFontComboBox, QRadioButton, QPushButton, QSpinBox, \
+            QDoubleSpinBox, QGroupBox, QKeySequenceEdit
         if type(ignore) not in ITER_TYPES: ignore = (ignore,)  # ensure ignore parameter is an array
         section = self.getSection(section)
 
@@ -1175,43 +1279,61 @@ class ConfigParseBetterQt(ConfigParseBetter):   # TODO support Pyside and other 
             QGroupBox:        actionCheck,
             QPushButton:      actionCheck,
             QCheckBox:        lambda w, name: self.save(name, w.checkState() if w.isTristate() else w.isChecked(), section=section),
+            QFontComboBox:    lambda w, name: self.save(name, w.currentFont().toString(), section=section),
             QLineEdit:        lambda w, name: self.save(name, w.text(), section=section),
             QKeySequenceEdit: lambda w, name: self.save(name, w.keySequence().toString(), section=section),
             QComboBox:        (lambda w, name: self.save(name, w.currentText(), section=section)
                                if getComboText else self.save(name, w.currentIndex(), section=section)),
         }
 
+        # create true ignore list
         _ignore = []
         for widget_type in ignore:
             if widget_type in actions: del actions[widget_type]
             elif not isinstance(widget_type, str): _ignore.append(widget_type.objectName())
             else: _ignore.append(widget_type)
+
+        # add extraWidgets -> {widgetType: (name_of_getter_attribute, name_of_setter_attribute)}
+        # workaround for a Python bug/oddity involving creating lambdas in iterables
+        def get_getter(getter):
+            return lambda w, name: self.save(
+                name, getattr(w, getter)(), section=section)
         for widget_type, (getter, _) in extraWidgets.items():
-            actions[widget_type] = lambda w, name: self.save(
-                name, getattr(w, getter)(), section=section
-            )
+            actions[widget_type] = get_getter(getter)
+
+        # redirect subclasses to parent's action
+        for subclass, parent in subclasses.items():
+            if parent in actions:
+                actions[subclass] = actions[parent]
 
         def getWidget(widget, ignore):
             name = widget.objectName()
-            if name[:3] == 'qt_' or not name or name in ignore: return                  # ignore qt_ prefixes -> special qt things
+            if name[:3] == 'qt_' or not name or name in ignore:
+                return                      # ignore qt_ prefixes -> special qt things
             widget_type = type(widget)
-            if widget_type in actions: actions[widget_type](widget, name)
+            if widget_type in actions:
+                actions[widget_type](widget, name)
 
-        def getChildren(widget, ignore):        # TODO is there a faster way to find these widgets by their objectNames?
+        def getChildren(widget, ignore):    # TODO is there a faster way to find these widgets by their objectNames?
             for child in widget.children():
                 name = child.objectName()
-                if not name or name[:3] == 'qt_' or name in ignore: continue            # ignore qt_ prefixes -> special qt things
+                if not name or name[:3] == 'qt_' or name in ignore:
+                    continue                # ignore qt_ prefixes -> special qt things
                 widget_type = type(child)
-                if widget_type in actions: actions[widget_type](child, name)
+                if widget_type in actions:
+                    actions[widget_type](child, name)
                 getChildren(child, ignore)
 
         for widget in widgets:
             getWidget(widget, _ignore)
             if children:
-                if recursive: getChildren(widget, _ignore)
+                if recursive:
+                    getChildren(widget, _ignore)
                 else:
                     for child in widget.children():
                         name = child.objectName()
-                        if not name or name[:3] == 'qt_' or name in _ignore: continue   # ignore qt_ prefixes -> special qt things
+                        if not name or name[:3] == 'qt_' or name in _ignore:
+                            continue        # ignore qt_ prefixes -> special qt things
                         widget_type = type(child)
-                        if widget_type in actions: actions[widget_type](child, name)
+                        if widget_type in actions:
+                            actions[widget_type](child, name)
