@@ -125,6 +125,7 @@ MEDIAINFO_DLL_PATH = pjoin(BIN_FOLDER, 'MediaInfo.dll') if IS_COMPILED else None
 logging.basicConfig(
     level=logging.INFO,
     encoding='utf-16',
+    force=True,
     format='{asctime} {lineno:<3} {levelname} {funcName}: {message}',
     datefmt='%I:%M:%S%p',
     style='{',
@@ -316,6 +317,7 @@ def verify_ffmpeg() -> None:
     ''' Checks if FFmpeg exists. If it isn't in the script's folder,
         the user's PATH system variable is checked. If still not found,
         a message box is displayed and the script exits. '''
+
     logging.info('Verifying FFmpeg installation...')
     if exists('ffmpeg.exe'): return
     else:
@@ -338,6 +340,7 @@ def verify_config_files() -> None:
     ''' Displays a message if config and/or menu file is missing, then gives
         user the option to create them immediately and quit or to continue
         with default settings and a default menu. '''
+
     logging.info('Verifying config.settings and config.menu...')
     if NO_CONFIG or NO_MENU:
         if NO_CONFIG and NO_MENU: parts = ('config file or a menu file', 'them', 'files')
@@ -370,6 +373,7 @@ def sanitize_json(path: str, comment_prefix: str = '//',
         True). Lines with `comment_prefix` are ignored. Returns the raw list
         of key-value pairs before they're converted to a dictionary. Designed
         for reading JSON files that are meant to be edited by users. '''
+
     with open(path, 'r') as file:
         striped = (line.strip() for line in file.readlines())
         raw_json_lines = (line for line in striped if line and line[:2] != comment_prefix)
@@ -679,14 +683,14 @@ TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = cfg.load('EACH_RECENT_CLIP_HAS_SUBMENU'
 TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO = cfg.load('SUBMENUS_DISPLAY_EXTRA_INFO', True)
 TRAY_EXTRA_INFO_DATE_FORMAT = cfg.load('EXTRA_INFO_DATE_FORMAT', '%a %#D %#I:%M:%S%p')
 cfg.comment('''RECENT_CLIP_NAME_FORMAT variables:
-    ?date         - "1/17/22 12:09am" (see https://strftime.org/ for date formatting)
+    ?date         - "1/17/22 12:09am" (RECENT_CLIP_DATE_FORMAT only, see https://strftime.org/)
     ?recency      - "2 days ago"
     ?recencyshort - "2d"
     ?size         - "244.1mb"
     ?length       - "1:30" <- 90 seconds
-    ?clip         - Name of a clip only.
-    ?clipdir      - Name and immediate parent directory only.
-    ?clippath     - Full path to a clip.''', before='\n')
+    ?clip         - The clip's basename.
+    ?clipdir      - The clip's name and immediate parent directory only.
+    ?clippath     - The clip's full path.''', before='\n')
 TRAY_RECENT_CLIP_NAME_FORMAT = cfg.load('RECENT_CLIP_NAME_FORMAT', '(?recencyshort) - ?clip')
 TRAY_RECENT_CLIP_DATE_FORMAT = cfg.load('RECENT_CLIP_DATE_FORMAT', '%#I:%M%p')
 TRAY_RECENT_CLIP_DEFAULT_TEXT = cfg.load('EMPTY_SLOT_TEXT', ' --')
@@ -1727,9 +1731,9 @@ if __name__ == '__main__':
 
 
         def get_clip_tray_action(index: int):
-            ''' Generates the action associated with each recent clip item in the tray-icon's menu.
-                If a submenu is desired, one is created and returned. Otherwise, a callable lambda is returned.
-                `index` will be a negative number, starting with -1 for the topmost item. '''
+            ''' Generates the action lambda/submenu associated with `index`
+                in the tray-icon's menu. `index` will be a negative number,
+                starting with -1 for the topmost item. '''
             if TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS:
                 if TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO:
                     last_clips = cutter.last_clips
