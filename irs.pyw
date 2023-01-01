@@ -458,7 +458,7 @@ def restore_menu_file() -> None:
 //    "clear_history":        Clears your clip history.
 //    "refresh":              Manually checks for new clips and refreshes existing ones.
 //    "check_for_updates":    Checks for a new release on GitHub to install.
-//    'about':                Shows an "About" window.
+//    "about":                Shows an "About" window.
 //    "quit":                 Exits this program.
 //
 // Special tray actions:
@@ -1056,7 +1056,7 @@ class Clip:
         self.full_date = datetime.strftime(datetime.fromtimestamp(stat.st_ctime), TRAY_EXTRA_INFO_DATE_FORMAT)
 
         length = get_video_duration(path)   # NOTE: this could be faster, but uglier
-        length_int = int(length)
+        length_int = round(length)
         length_string = f'{length_int // 60}:{length_int % 60:02}'
         self.length = length
         self.length_string = length_string
@@ -1075,7 +1075,7 @@ class Clip:
         self.size = size
 
         length = get_video_duration(path)
-        length_int = int(length)
+        length_int = round(length)
         length_string = f'{length_int // 60}:{length_int % 60:02}'
         self.length = length
         self.length_string = length_string
