@@ -681,20 +681,28 @@ TRAY_MIDDLE_CLICK_ACTION = cfg.load('MIDDLE_CLICK_ACTION', 'play_most_recent')
 
 # --- Recent clip menu settings ---
 cfg.setSection(' --- Tray Menu Recent Clips --- ')
-cfg.comment('''MAX_RECENT_CLIPS             - Total number of recent clips to display in the menu
-                                (NOT the total number of clips saved in general).
-PLAY_RECENT_CLIPS_ON_CLICK   - Play clips on click instead of opening them in explorer.
-                                Only used if `EACH_RECENT_CLIP_HAS_SUBMENU` is False.
-EACH_RECENT_CLIP_HAS_SUBMENU - If True, each clip will have a dedicated
-                                submenu full of editing actions.
-SUBMENUS_DISPLAY_EXTRA_INFO  - If True, a separator and two extra lines of info
-                                will appear at the bottom of each clip's submenu.
-                                Only used if `EACH_RECENT_CLIP_HAS_SUBMENU` is True.
-EXTRA_INFO_DATE_FORMAT       - The date format used if `SUBMENUS_DISPLAY_EXTRA_INFO`
-                                is True. See https://strftime.org/ for date formatting.''')
+cfg.comment('''MAX_RECENT_CLIPS                      - Total number of recent clips to display in the menu
+                                         (NOT the total number of clips saved in general).
+PLAY_RECENT_CLIPS_ON_CLICK            - Play clips on click instead of opening them in explorer.
+                                         Only used if `EACH_RECENT_CLIP_HAS_SUBMENU` is False.
+EACH_RECENT_CLIP_HAS_SUBMENU          - If True, each clip will have a dedicated
+                                         submenu full of editing actions.
+EACH_SUBMENU_HAS_TRIM_SUBMENU         - If True, each clip's submenu will have a "Trim..."
+                                         submenu with each trim length listed in the
+                                         "--- Trim Hotkeys ---" section. If False, "Trim..."
+                                         will be an item that triggers a custom-length trim.
+TRIM_SUBMENU_ALWAYS_HAS_CUSTOM_LENGTH - If True, the "Trim..." submenu will always include a
+                                         custom-length item, even if one isn't present in the
+                                         "--- Trim Hotkeys ---" section.
+SUBMENUS_DISPLAY_EXTRA_INFO           - If True, a separator and two extra lines of info
+                                         will appear at the bottom of each clip's submenu.
+EXTRA_INFO_DATE_FORMAT                - The date format used if `SUBMENUS_DISPLAY_EXTRA_INFO`
+                                         is True. See https://strftime.org/ for date formatting.''')
 TRAY_RECENT_CLIP_COUNT = cfg.load('MAX_RECENT_CLIPS', 10)
 TRAY_CLIPS_PLAY_ON_CLICK = cfg.load('PLAY_RECENT_CLIPS_ON_CLICK', True)
 TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = cfg.load('EACH_RECENT_CLIP_HAS_SUBMENU', True)
+TRAY_RECENT_CLIPS_HAVE_TRIM_SUBMENU = cfg.load('EACH_SUBMENU_HAS_TRIM_SUBMENU', True)
+TRAY_RECENT_CLIPS_TRIM_SUBMENU_FORCE_CUSTOM_LENGTH = cfg.load('TRIM_SUBMENU_ALWAYS_HAS_CUSTOM_LENGTH', True)
 TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO = cfg.load('SUBMENUS_DISPLAY_EXTRA_INFO', True)
 TRAY_EXTRA_INFO_DATE_FORMAT = cfg.load('EXTRA_INFO_DATE_FORMAT', '%a %#D %#I:%M:%S%p')
 cfg.comment('''RECENT_CLIP_NAME_FORMAT variables:
@@ -1831,13 +1839,21 @@ if __name__ == '__main__':
                 get_trim_action = lambda length, index: lambda: cutter.trim_clip(length, index, patient=False)
 
                 def get_trim_submenu():
-                    lengths = LENGTH_DICTIONARY.values()
-                    for length in lengths:
-                        text = f'{length} seconds' if length != 'custom' else 'Custom length'
-                        yield pystray.MenuItem(text, get_trim_action(length, index))
+                    if not TRAY_RECENT_CLIPS_HAVE_TRIM_SUBMENU:
+                        return lambda: cutter.trim_clip('custom', index, patient=False)
+                    else:
+                        items = []
+                        custom_text = 'Custom...'
+                        lengths = LENGTH_DICTIONARY.values()
+                        for length in lengths:
+                            text = f'{length} seconds' if length != 'custom' else custom_text
+                            items.append(pystray.MenuItem(text, get_trim_action(length, index)))
+                        if TRAY_RECENT_CLIPS_TRIM_SUBMENU_FORCE_CUSTOM_LENGTH and 'custom' not in lengths:
+                            items.append(pystray.MenuItem(custom_text, get_trim_action('custom', index)))
+                        return pystray.Menu(*items)
 
                 return pystray.Menu(
-                    pystray.MenuItem('Trim...', pystray.Menu(*(get_trim_submenu()))),
+                    pystray.MenuItem('Trim...', get_trim_submenu()),
                     pystray.MenuItem('Play...', lambda: cutter.open_clip(index, play=True, patient=False)),
                     pystray.MenuItem('Explore...', lambda: cutter.open_clip(index, play=False, patient=False)),
                     pystray.MenuItem('Splice...', lambda: cutter.concatenate_last_clips(index, patient=False)),
