@@ -542,11 +542,19 @@ cfg = ConfigParseBetter(
 
 # --- Hotkeys ---
 cfg.setSection(' --- Trim Hotkeys --- ')
-cfg.comment('Usage: <hotkey> = <trim length>')
+cfg.comment('''Usage: <hotkey> = <trim length>
+Use "custom" as the <trim length> to enter a length on your
+keyboard in real-time after pressing the associated <hotkey>.
+Press Esc to cancel a custom trim.''')
 LENGTH_DICTIONARY = {}
 for key, length in cfg.loadAllFromSection():
-    try: LENGTH_DICTIONARY[key] = int(float(length.strip()))
-    except: logging.warning(f'(!) Could not add trim length "{length}"')
+    length = length.strip().strip('"\'`').lower()
+    if length == 'custom':
+        LENGTH_DICTIONARY[key] = length
+    else:
+        try: LENGTH_DICTIONARY[key] = int(float(length))
+        except: logging.warning(f'(!) Could not add trim length "{length}"')
+
 if not LENGTH_DICTIONARY:
     LENGTH_DICTIONARY = {
         'alt + 1': 10,
@@ -557,7 +565,8 @@ if not LENGTH_DICTIONARY:
         'alt + 6': 60,
         'alt + 7': 70,
         'alt + 8': 80,
-        'alt + 9': 90
+        'alt + 9': 90,
+        'alt + 0': 'custom'
     }
     for name, alias in LENGTH_DICTIONARY.items():
         cfg.load(name, alias)
@@ -982,6 +991,34 @@ def pre_process_event(self, event):
             hotkey = tuple(sorted(keyboard._pressed_events))    # "hotkey" is a tuple of scan codes being pressed right now
     for callback in self.nonblocking_hotkeys[hotkey]:
         callback(event)
+    return scan_code or (event.name and event.name != 'unknown')
+
+
+TRIM_NUMBERS = []
+def wait_for_custom_trim_length(self, event):
+    ''' Alternative `pre_process_event` implementation designed for catching
+        custom trim lengths being entered. Ignores hotkeys, and waits for a
+        non-number to be pressed. Cancels on `Esc`. Accepts keypad numbers,
+        regardless of numlock state. This and the above method are swapped
+        in real-time when needed. '''
+    try:
+        scan_code = event.scan_code
+        for key_hook in self.nonblocking_keys[scan_code]:
+            key_hook(event)
+
+        if event.event_type == 'down':
+            logging.info(f'Trim key "{event.name}" (scan_code={event.scan_code})')
+            if event.name.isnumeric():
+                TRIM_NUMBERS.append(event.name)
+            else:
+                if event.name == 'escape':
+                    TRIM_NUMBERS.clear()
+                keyboard._KeyboardListener.pre_process_event = pre_process_event
+    except:
+        TRIM_NUMBERS.clear()
+        logging.error(f'(!) Error while getting custom trim length: {format_exc()}')
+        keyboard._KeyboardListener.pre_process_event = pre_process_event
+
     return scan_code or (event.name and event.name != 'unknown')
 
 
@@ -1434,17 +1471,17 @@ class AutoCutter:
     # ---------------------
     # Clip actions
     # ---------------------
-    def trim_clip(self, length, index=-1, patient=True):
-        ''' Trims the clip at `index` down to the last `length` seconds. Clip
-            is edited in-place (the original is moved to `BACKUP_FOLDER`). '''
+    def _trim_clip(self, clip: Clip, length: int):
+        ''' Trims `clip` down to the last `length` seconds. Clip is edited
+            in-place, and the original is moved to `BACKUP_FOLDER`. '''
         try:
-            clip = self.get_clip(index, verb='Trim', alert=length, min_clips=1, patient=patient)
             clip_path = clip.path
             clip_length = clip.length
-            logging.info(f'Trimming clip {clip.name} to {length} seconds')
-            logging.info(f'Clip is {clip_length:.2f} seconds long.')
-            logging.info(f'{clip_length}: {type(clip_length)} | {length}: {type(length)}')
-            if clip_length <= length: return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
+            if clip_length <= length:
+                return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
+            if length <= 0:
+                return logging.info('(?) Trim length must be greater than 0 seconds.')
+            logging.info(f'Trimming clip {clip.name} from {clip_length:.2f} to {length} seconds...')
 
             relative_temp_path = pjoin(clip.game, f'{time.time_ns()}.{clip.name}')
             temp_path = pjoin(BACKUP_FOLDER, relative_temp_path)
@@ -1473,6 +1510,46 @@ class AutoCutter:
         except:
             logging.error(f'(!) Error BEFORE trimming clip: {format_exc()}')
             play_alert('error')
+
+
+    def trim_clip(self, length, index=-1, patient=True):
+        ''' Trims a clip at `index` down to the last `length` seconds. If
+            `length` is the string "custom", a custom-length trim is started
+            in a separate thread. '''
+        clip = self.get_clip(index, verb='Trim', alert=length, min_clips=1, patient=patient)
+        if length == 'custom':
+            logging.info(f'Custom-length trim requested on index {index}...')
+            Thread(target=self.trim_clip_custom_length_thread, args=(clip,)).start()
+        else:
+            logging.info(f'Trim requested on index {index}...')
+            self._trim_clip(clip, length)
+
+
+    def trim_clip_custom_length_thread(self, clip: Clip):
+        ''' Swaps our keyboard listener for one that listens for a sequence of
+            numbers to use as our trim length, then trims the given `clip`
+            once the listener is swapped back. Times out after 10 seconds.
+            Plays an alert for the given length if possible, and uses a
+            generic "trimming" alert otherwise. '''
+        TRIM_NUMBERS.clear()
+        keyboard._KeyboardListener.pre_process_event = wait_for_custom_trim_length
+
+        start = time.time()
+        timeout = 10
+        while keyboard._KeyboardListener.pre_process_event is wait_for_custom_trim_length:
+            time.sleep(0.1)
+            if time.time() - start >= timeout:
+                keyboard._KeyboardListener.pre_process_event = pre_process_event
+                logging.info(f'Custom-length trim timed out after {timeout} seconds.')
+
+        if TRIM_NUMBERS:
+            length = int(''.join(TRIM_NUMBERS))
+            if length <= 0: play_alert(sound='trim cancelled')
+            else: play_alert(sound=length, default='trim')
+            self._trim_clip(clip, length)
+        else:
+            logging.info('Custom-length trim cancelled.')
+            play_alert(sound='trim cancelled')
 
 
     def concatenate_last_clips(self, index=-1, patient=True):
@@ -1750,9 +1827,17 @@ if __name__ == '__main__':
                     )
                 else: extra_info_items = tuple()
 
-                get_trim_action = lambda length, index: lambda: cutter.trim_clip(length, index, patient=False)   # workaround for python bug/oddity involving creating lambdas in iterables
+                # workaround for python bug/oddity involving creating lambdas in iterables
+                get_trim_action = lambda length, index: lambda: cutter.trim_clip(length, index, patient=False)
+
+                def get_trim_submenu():
+                    lengths = LENGTH_DICTIONARY.values()
+                    for length in lengths:
+                        text = f'{length} seconds' if length != 'custom' else 'Custom length'
+                        yield pystray.MenuItem(text, get_trim_action(length, index))
+
                 return pystray.Menu(
-                    pystray.MenuItem('Trim...', pystray.Menu(*(pystray.MenuItem(f'{length} seconds', get_trim_action(length, index)) for length in LENGTH_DICTIONARY.values()))),
+                    pystray.MenuItem('Trim...', pystray.Menu(*(get_trim_submenu()))),
                     pystray.MenuItem('Play...', lambda: cutter.open_clip(index, play=True, patient=False)),
                     pystray.MenuItem('Explore...', lambda: cutter.open_clip(index, play=False, patient=False)),
                     pystray.MenuItem('Splice...', lambda: cutter.concatenate_last_clips(index, patient=False)),
