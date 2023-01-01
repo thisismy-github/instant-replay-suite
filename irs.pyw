@@ -217,13 +217,19 @@ def auto_rename_clip(path: str) -> None:
         return path, basename(path)
 
 
-def play_alert(sound: str) -> None:
-    ''' Plays a system-wide audio alert. `sound` is the filename of a WAV
-        file located within `RESOURCE_FOLDER`. Plays a generic OS alert if
-        `sound` doesn't exist, or a generic OS error sound if `sound` is
-        "error" and "error.wav" doesn't exist. '''
+def play_alert(sound: str, default: str = None) -> None:
+    ''' Plays a system-wide audio alert. `sound` is the filename of a WAV file
+        located within `RESOURCE_FOLDER`. Uses `default` if `sound` doesn't
+        exist. Falls back to a generic OS alert if `default` isn't provided
+        (or also doesn't exist). If `sound` or `default` is "error" and
+        "error.wav" doesn't exist, a generic OS error sound is used. '''
+
     if not AUDIO: return
+    sound = str(sound).lower()          # not actually necessary on Windows
     path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
+    if not exists(path) and default is not None:
+        sound = str(default).lower()
+        path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
     logging.info('Playing alert: ' + path)
 
     if exists(path):
@@ -1145,7 +1151,7 @@ class AutoCutter:
             Plays sound effect specified by `alert`. Describes action in log
             message with `verb` if specified, otherwise `alert` is used. '''
         log_verb = verb if verb else alert
-        if alert is not None: play_alert(str(alert).lower())
+        if alert is not None: play_alert(sound=alert, default=verb)
         if self.waiting_for_clip:
             logging.info(f'{log_verb} detected, waiting for instant replay to finish saving...')
             while self.waiting_for_clip: time.sleep(0.2)
@@ -1164,7 +1170,7 @@ class AutoCutter:
             to exist if `patient` is True. '''
         if not _recursive:
             logging.info(f'Getting clip at index {index} (verb={verb} alert={alert} min_clips={min_clips} patient={patient})')
-            if alert is not None: play_alert(str(alert).lower())
+            if alert is not None: play_alert(sound=alert, default=verb)
             if patient and not self.wait(verb=verb if verb else alert, min_clips=min_clips): return
 
         if index is not None: clip = self.last_clips[index]
