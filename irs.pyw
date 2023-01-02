@@ -319,27 +319,96 @@ def abort_launch(code: int, title: str, msg: str, flags: int = 0x00040010) -> No
     sys.exit(code)
 
 
-def verify_ffmpeg() -> None:
-    ''' Checks if FFmpeg exists. If it isn't in the script's folder,
-        the user's PATH system variable is checked. If still not found,
-        a message box is displayed and the script exits. '''
+def verify_ffmpeg() -> str:
+    ''' Checks if FFmpeg exists. If it isn't in the script's folder, the
+        user's PATH system variable is checked. If still not found, the latest
+        build of `ffmpeg.exe` from FFmpeg-essentials may be downloaded and
+        extracted to `BIN_FOLDER`. Returns FFmpeg's final path. '''
 
     logging.info('Verifying FFmpeg installation...')
-    if exists('ffmpeg.exe'): return
-    else:
-        for path in os.environ.get('PATH', '').split(';'):
-            try:
-                if 'ffmpeg.exe' in listdir(path):
-                    return
-            except: pass
+    if exists('ffmpeg.exe'): return pjoin(CWD, 'ffmpeg.exe')
+    for path in os.environ.get('PATH', '').split(';'):
+        try:
+            if 'ffmpeg.exe' in listdir(path):
+                return pjoin(path, 'ffmpeg.exe')
+        except: pass
+    for root, dirs, files in os.walk(CWD):
+        if root == CWD: continue
+        if 'ffmpeg.exe' in files:
+            return pjoin(root, 'ffmpeg.exe')
 
-    msg = ("FFmpeg was not detected. FFmpeg is required for all of this "
-           "program's editing features. Please ensure `ffmpeg.exe` is "
-           "either in your PATH or in this program's install folder.\n\n"
-           "You can download FFmpeg for Windows here (not clickable, sorry): "
-           "https://www.gyan.dev/ffmpeg/builds/")
-    show_message('FFmpeg not detected', msg)
-    sys.exit(3)
+    # ffmpeg not detected, download/extract it if we're compiled
+    msg = (f"FFmpeg was not detected. FFmpeg is required for {TITLE}'s "
+           "editing features. Please ensure \"ffmpeg.exe\" is either in "
+           f"your install folder or your system PATH variable.")
+    if not IS_COMPILED:
+        show_message('FFmpeg not detected', msg)
+        sys.exit(3)
+    else:
+        # ?-symbol, stay on top, Yes/No
+        msg += ("\n\nWould you like to automatically download the "
+                "latest build of FFmpeg to the \"bin\" folder?")
+        response = show_message('FFmpeg not detected', msg, 0x00040024)
+
+        if response == 6:               # Yes
+            download_url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+            download_path = pjoin(CWD, f'ffmpeg.{time.time_ns()}.zip')
+
+            try:
+                # override cacert.pem path to get rid of a pointless folder
+                import certifi.core
+                cacert_override_path = pjoin(BIN_FOLDER, 'cacert.pem')
+                os.environ["REQUESTS_CA_BUNDLE"] = cacert_override_path
+                certifi.core.where = lambda: cacert_override_path
+
+                # download
+                import update
+                update.download(download_url, download_path)
+
+                # extract just "ffmpeg.exe"
+                from zipfile import ZipFile
+                with ZipFile(download_path, 'r') as zip:
+                    for filename in zip.namelist():
+                        if filename[-10:] == 'ffmpeg.exe':
+                            zip.extract(filename, BIN_FOLDER)
+                            break
+
+                # move ffmpeg.exe to bin folder
+                extracted_path = pjoin(BIN_FOLDER, filename)
+                final_path = pjoin(BIN_FOLDER, 'ffmpeg.exe')
+                logging.info(f'Moving {extracted_path} to {final_path}')
+                os.rename(extracted_path, final_path)
+
+                # delete excess ffmpeg folder that was created
+                import shutil
+                extracted_folder = pjoin(BIN_FOLDER, filename.split('/')[0])
+                logging.info(f'Deleting excess FFmpeg folder at {extracted_folder}')
+                try: shutil.rmtree(extracted_folder)
+                except: logging.warning('(!) Could not delete excess FFmpeg folder.')
+
+                # delete downloaded archive
+                logging.info('Deleting download path')
+                os.remove(download_path)
+
+                # flags are i-symbol, stay on top
+                msg = ("FFmpeg has been successfully downloaded. "
+                       f"Size: {getsize(final_path) / 1048576:.1f}mb"
+                       f"\n\n{final_path}")
+                show_message('FFmpeg download successful', msg, 0x00040040)
+                return final_path
+
+            except Exception as error:
+                # X-symbol, stay on top
+                msg = (f"FFmpeg download from \"{download_url}\" to \""
+                       f"{download_path}\" failed:\n\n{type(error)}: {error}")
+                show_message('FFmpeg download failed', msg, 0x00040010)
+
+                if exists(download_path):
+                    try: os.remove(download_path)
+                    except: logging.warning(f'(!) FFmpeg download at "{download_path}" could not be removed')
+
+        # exit if "No" is pressed or we errored out
+        sys.exit(3)
 
 
 def verify_config_files() -> None:
@@ -1496,7 +1565,7 @@ class AutoCutter:
             renames(clip_path, temp_path)
 
             try:
-                cmd = f'ffmpeg -y -i "{temp_path}" -ss {clip_length - length} -c:v copy -c:a copy "{clip_path}" -hide_banner -loglevel warning'
+                cmd = f'{FFMPEG} -y -i "{temp_path}" -ss {clip_length - length} -c:v copy -c:a copy "{clip_path}" -hide_banner -loglevel warning'
                 logging.info(cmd)
                 process = subprocess.Popen(cmd, shell=True)
                 process.wait()
@@ -1580,7 +1649,7 @@ class AutoCutter:
             with open(text_path, 'w') as txt:
                 txt.write(f"file '{clip_path1.replace(sep, '/')}'\nfile '{clip_path2.replace(sep, '/')}'")
 
-            cmd = f'ffmpeg -y -f concat -safe 0 -i "{text_path}" -c copy "{temp_path}" -hide_banner -loglevel warning'
+            cmd = f'{FFMPEG} -y -f concat -safe 0 -i "{text_path}" -c copy "{temp_path}" -hide_banner -loglevel warning'
             logging.info(cmd)
             process = subprocess.Popen(cmd, shell=True)
             process.wait()
@@ -1743,8 +1812,9 @@ class AutoCutter:
 if __name__ == '__main__':
     try:
         check_for_updates(manual=False)
-        verify_ffmpeg()
+        FFMPEG = verify_ffmpeg()
         verify_config_files()
+        logging.info('FFmpeg location: ' + FFMPEG)
 
         logging.info(f'Memory usage before initializing AutoCutter class: {get_memory():.2f}mb')
         cutter = AutoCutter()
