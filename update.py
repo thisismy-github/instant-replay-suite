@@ -37,9 +37,11 @@ def get_later_version(version_a: str, version_b: str) -> str:
     return version_a if atuple > btuple else version_b
 
 
-def check_for_update(show_message_for_no_update: bool = False) -> None:
+def check_for_update(show_message_for_no_update: bool = False, lock_file: str = '') -> None:
     ''' Checks GitHub for an update, and downloads it if requested by the
         user. Returns an exit code if we need to close for an incoming update.
+        `lock_file` specifies the path to an open file to give to the updater
+        so that it has a way to see when we've closed.
 
         The following format is assumed:
             > REPOSITORY_URL -- https://github.com/thisismy-github/instant-replay-suite
@@ -97,14 +99,8 @@ def check_for_update(show_message_for_no_update: bool = False) -> None:
                 filename = f'{name}_{latest_version}.zip'
                 download_url = f'{latest_version_url.replace("/tag/", "/download/")}/{filename}'
                 download_path = os.path.join(CWD, filename)
-
-                # open a file that will only be closed when our script exits or we aren't updating
-                # this way the updater has a way of telling when the script closes
-                lock_file = os.path.join(CWD, f'{time.time()}_download.txt')
-                with open(lock_file, 'w'):
-                    if download_update(latest_version, download_url, download_path, lock_file):
-                        return 99
-                os.remove(lock_file)
+                if download_update(latest_version, download_url, download_path, lock_file):
+                    return 99
 
         # otherwise, we must be up to date
         else:
@@ -119,37 +115,38 @@ def check_for_update(show_message_for_no_update: bool = False) -> None:
         logger.error('(!) UPDATE-CHECK FAILED: ' + format_exc())
 
 
+def download(url: str, path: str) -> None:
+    ''' Downloads file from `url` in chunks and saves it to `path`. '''
+    import requests
+    download_response = requests.get(url, stream=True)
+    download_response.raise_for_status()
+    total_size = int(download_response.headers.get('content-length'))
+
+    downloaded = 0
+    mb_per_chunk = 4
+
+    # download in chunks (not really necessary since we don't have a GUI)
+    with open(path, 'wb') as file:
+        logger.info(f'Downloading {total_size / 1048576:.2f}mb')
+        chunk_size = mb_per_chunk * (1024 * 1024)
+        start_time = time.time()
+        for chunk in download_response.iter_content(chunk_size=chunk_size):
+            file.write(chunk)
+            downloaded += len(chunk)
+            percent = (downloaded / total_size) * 100
+            logger.info(f'{percent:.0f}% ({downloaded / 1048576:.0f}mb/{total_size / 1048576:.2f}mb)')
+        logger.info(f'File downloaded after {time.time() - start_time:.1f} seconds.')
+
+
 def download_update(latest_version: str, download_url: str, download_path: str, lock_file: str) -> None:
     ''' Downloads update from `download_url` to `download_path` and installs
         it using our updater-utility. Passes `latest_version` and `lock_file`
         to the updater-utility. '''
 
-    import requests
-    logger.info(f'Downloading version {latest_version} from {download_url} to {download_path}')
-
     try:
-        download_response = requests.get(download_url, stream=True)
-        download_response.raise_for_status()
-        total_size = int(download_response.headers.get('content-length'))
-
-        downloaded = 0
-        mb_per_chunk = 4
-
-        # download in chunks (not really necessary since we don't have a GUI)
-        with open(download_path, 'wb') as file:
-            logger.info(f'Downloading {total_size / 1048576:.2f}mb')
-            chunk_size = mb_per_chunk * (1024 * 1024)
-            start_time = time.time()
-            for chunk in download_response.iter_content(chunk_size=chunk_size):
-                file.write(chunk)
-                downloaded += len(chunk)
-                percent = (downloaded / total_size) * 100
-
-                message = f'{percent:.0f}% ({downloaded / 1048576:.0f}mb/{total_size / 1048576:.2f}mb)'
-                logger.info(message)
-
-        message = f'Update downloaded after {time.time() - start_time:.1f} seconds, restarting...'
-        logger.info(message)
+        logger.info(f'Downloading version {latest_version} from {download_url} to {download_path}')
+        download(download_url, download_path)
+        logger.info('Update download successful, restarting...')
 
         # locate updater executable -> check both root folder and bin folder
         original_updater_path = os.path.join(CWD, 'updater.exe')    # IS_COMPILED is assumed here
@@ -236,7 +233,7 @@ def validate_update(update_report_path: str) -> None:
 
         if status != 'SUCCESS':
             logger.warning(f'(!) UPDATE FAILED: {status}')
-            msg = ("The attempted update failed while unpacking. "
+            msg = (f"The update failed while unpacking:\n{status}.\n\n"
                    "If needed, you can manually download the " + HYPERLINK)
             return show_message('Update failed', msg)
 

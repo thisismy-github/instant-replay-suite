@@ -273,14 +273,25 @@ def check_for_updates(manual: bool = True) -> None:
 
         # check for updates and exit if we're installing a new version
         if manual or CHECK_FOR_UPDATES_ON_LAUNCH:
-            if IS_COMPILED:             # if compiled, override cacert.pem path...
-                import certifi.core     # ...to get rid of a pointless folder
+            if not IS_COMPILED:
+                update.check_for_update(manual)
+
+            else:                               # if compiled, override cacert.pem path...
+                import certifi.core             # ...to get rid of a pointless folder
                 cacert_override_path = pjoin(BIN_FOLDER, 'cacert.pem')
                 os.environ["REQUESTS_CA_BUNDLE"] = cacert_override_path
                 certifi.core.where = lambda: cacert_override_path
-            exit_code = update.check_for_update(manual)
-            if exit_code is not None:
-                sys.exit(exit_code)
+
+                # open a file that will only be closed when our script exits or we
+                # don't update -> this lets the updater tell when the script closes
+                lock_file = pjoin(BIN_FOLDER, f'{time.time_ns()}.updatecheck.txt')
+                with open(lock_file, 'w'):
+                    exit_code = update.check_for_update(manual, lock_file=lock_file)
+                    if exit_code is not None:   # make sure we don't write a fresh...
+                        if not manual:          # ...config if we're about to update
+                            atexit.unregister(cfg.write)
+                        sys.exit(exit_code)
+                os.remove(lock_file)            # remove lock file if we didn't close
 
 
 def about() -> None:
@@ -341,7 +352,8 @@ def verify_ffmpeg() -> str:
     msg = (f"FFmpeg was not detected. FFmpeg is required for {TITLE}'s "
            "editing features. Please ensure \"ffmpeg.exe\" is either in "
            f"your install folder or your system PATH variable.")
-    if not IS_COMPILED:
+    if not IS_COMPILED:                 # don't write fresh config
+        if NO_CONFIG: atexit.unregister(cfg.write)
         show_message('FFmpeg not detected', msg)
         sys.exit(3)
     else:
@@ -407,7 +419,8 @@ def verify_ffmpeg() -> str:
                     try: os.remove(download_path)
                     except: logging.warning(f'(!) FFmpeg download at "{download_path}" could not be removed')
 
-        # exit if "No" is pressed or we errored out
+        # exit if "No" is pressed or we errored out (and don't write a fresh config)
+        if NO_CONFIG: atexit.unregister(cfg.write)
         sys.exit(3)
 
 
