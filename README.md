@@ -1,4 +1,4 @@
-# Instant Replay Suite [![Latest Release](https://img.shields.io/github/release/thisismy-github/instant-replay-suite/all.svg)](https://github.com/thisismy-github/instant-replay-suite/releases) [![Download Count](https://img.shields.io/github/downloads/thisismy-github/instant-replay-suite/total?color=success)](https://github.com/thisismy-github/instant-replay-suite/releases/latest)
+# Instant Replay Suite [![Latest Release](https://img.shields.io/github/release/thisismy-github/instant-replay-suite/all.svg)](https://github.com/thisismy-github/instant-replay-suite/releases/latest) [![Lines of code](https://img.shields.io/tokei/lines/github/thisismy-github/instant-replay-suite)](https://github.com/thisismy-github/instant-replay-suite/releases) [![Download Count](https://img.shields.io/github/downloads/thisismy-github/instant-replay-suite/total?color=success)](https://github.com/thisismy-github/instant-replay-suite/releases) [![Stars](https://img.shields.io/github/stars/thisismy-github/instant-replay-suite?color=success)](https://github.com/thisismy-github/instant-replay-suite/stargazers)
 
 A suite of tools for formatting and editing Instant Replay clips, both in-game and out.
 
@@ -8,23 +8,23 @@ A suite of tools for formatting and editing Instant Replay clips, both in-game a
 
 ## Trimming
 
-Use customizable hotkeys to instantly trim clips to any length you choose, or even enter the trim length yourself using your number keys (requires [FFmpeg](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)).
+Use customizable hotkeys to instantly trim clips to any length you choose (defaults to `Alt + 1-9` for 10-90 seconds), or enter the length yourself using your number keys (defaults to `Alt + 0`). Requires [FFmpeg](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip).
 
 ## Splicing
 
-Use another hotkey to instantly concatenate two consecutive clips together (requires [FFmpeg](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)).
+Instantly concatenate/splice the last two clips together (defaults to `Alt + C`). Requires [FFmpeg](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip).
 
 ## Backups/Undo
 
-Automatically undo your last edit using another hotkey. Backups for your last several edited clips will be saved to give you further peace of mind.
+Instantly undo your last edit using backups of your most recently edited clips (defaults to `Alt + U`).
 
 ## Automatically Rename Clips
 
-Renames clips as they're saved using a highly customizable naming format. Allows you to set "aliases" for games to shorten their names while renaming. A handful of common aliases are included by default, i.e. "Left 4 Dead 2" becomes "L4D2".
+Rename clips as they're saved using a highly customizable naming format. Allows you to set aliases for games while renaming, i.e. "Left 4 Dead 2" becomes "L4D2". A handful of common aliases are included by default.
 
 ## System Tray Icon
 
-A *highly* customizable tray menu that can be accessed at any time that offers all of the same features listed above. Edit, delete, play, and explore any clip you want, not just the latest one, while also getting to see key information about each clip. Offers customizable left-click and middle-click actions.
+A *highly* customizable tray menu that can be accessed at any time that offers all of the same features listed above. Edit, play, and explore any of your recent clips (not just the latest one!), while getting to see key information about each clip. Offers customizable left-click and middle-click actions.
 
 # Other features
 
@@ -55,4 +55,4 @@ See the `executable` folder for details on how to compile (it's REALLY easy).
 - `configparsebetter.py` is currently off-limits (part of a future project).
 - Avoid introducing new, heavy dependencies where possible.
 - Avoid relative paths where possible (use `CWD` for the root folder and `pjoin` for creating paths).
-- Be mindful of `REPOSITORY_URL` when making commits if you changed it while testing.
+- Be mindful of `REPOSITORY_URL` when making commits if you change it while testing.
