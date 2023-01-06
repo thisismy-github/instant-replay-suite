@@ -378,11 +378,13 @@ def verify_ffmpeg() -> str:
                 import update
                 update.download(download_url, download_path)
 
-                # extract just "ffmpeg.exe"
+                # extract just "ffmpeg.exe" if we have enough space
                 from zipfile import ZipFile
                 with ZipFile(download_path, 'r') as zip:
                     for filename in zip.namelist():
                         if filename[-10:] == 'ffmpeg.exe':
+                            size = zip.getinfo(filename).file_size
+                            update.check_available_space(size, BIN_FOLDER)
                             zip.extract(filename, BIN_FOLDER)
                             break
 
@@ -410,6 +412,7 @@ def verify_ffmpeg() -> str:
                 show_message('FFmpeg download successful', msg, 0x00040040)
                 return final_path
 
+            except update.InsufficientSpaceError: pass
             except Exception as error:
                 # X-symbol, stay on top
                 msg = (f"FFmpeg download from \"{download_url}\" to \""

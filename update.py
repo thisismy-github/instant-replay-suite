@@ -25,7 +25,12 @@ show_message = None
 HYPERLINK = None
 logger = logging.getLogger('update.py')
 
-# ---
+
+# --------------------------
+# Utility functions/classes
+# --------------------------
+class InsufficientSpaceError(Exception): pass
+
 
 # https://stackoverflow.com/questions/11887762/how-do-i-compare-version-numbers-in-python
 def get_later_version(version_a: str, version_b: str) -> str:
@@ -37,6 +42,52 @@ def get_later_version(version_a: str, version_b: str) -> str:
     return version_a if atuple > btuple else version_b
 
 
+def check_available_space(space_needed: int, path: str,
+                          overhead_factor: float = 1.1) -> bool:
+    ''' Shows a warning and raises `InsufficientSpaceError` if
+        `space_needed` (in bytes) multiplied by `overhead_factor`
+        is less than what's available on `path`'s drive. '''
+    import shutil
+    drive = os.path.splitdrive(path)[0]
+    needed = space_needed * overhead_factor
+    available = shutil.disk_usage(drive).free
+    if needed > available:
+        msg = (f"There is not enough space available on your {drive}\\ drive."
+               f"\n\nFree space required: {needed / 1048576:.0f}mb"
+               f"\nFree space available: {available / 1048576:.0f}mb")
+        show_message('Insufficient space remamining', msg, 0x00040010)
+        raise InsufficientSpaceError    # X-symbol, stay on top ^
+
+
+def download(url: str, path: str) -> None:
+    ''' Downloads file from `url` in chunks and saves it to `path`. '''
+    import requests
+    download_response = requests.get(url, stream=True)
+    download_response.raise_for_status()
+
+    # check if we have enough space (raises InsufficientSpaceError)
+    total_size = int(download_response.headers.get('content-length'))
+    check_available_space(total_size, path)
+
+    downloaded = 0
+    mb_per_chunk = 4
+
+    # download in chunks (not really necessary since we don't have a GUI)
+    with open(path, 'wb') as file:
+        logger.info(f'Downloading {total_size / 1048576:.2f}mb')
+        chunk_size = mb_per_chunk * (1024 * 1024)
+        start_time = time.time()
+        for chunk in download_response.iter_content(chunk_size=chunk_size):
+            file.write(chunk)
+            downloaded += len(chunk)
+            percent = (downloaded / total_size) * 100
+            logger.info(f'{percent:.0f}% ({downloaded / 1048576:.0f}mb/{total_size / 1048576:.2f}mb)')
+        logger.info(f'File downloaded after {time.time() - start_time:.1f} seconds.')
+
+
+# --------------------------
+# Update functions
+# --------------------------
 def check_for_update(show_message_for_no_update: bool = False, lock_file: str = '') -> None:
     ''' Checks GitHub for an update, and downloads it if requested by the
         user. Returns an exit code if we need to close for an incoming update.
@@ -115,29 +166,6 @@ def check_for_update(show_message_for_no_update: bool = False, lock_file: str = 
         logger.error('(!) UPDATE-CHECK FAILED: ' + format_exc())
 
 
-def download(url: str, path: str) -> None:
-    ''' Downloads file from `url` in chunks and saves it to `path`. '''
-    import requests
-    download_response = requests.get(url, stream=True)
-    download_response.raise_for_status()
-    total_size = int(download_response.headers.get('content-length'))
-
-    downloaded = 0
-    mb_per_chunk = 4
-
-    # download in chunks (not really necessary since we don't have a GUI)
-    with open(path, 'wb') as file:
-        logger.info(f'Downloading {total_size / 1048576:.2f}mb')
-        chunk_size = mb_per_chunk * (1024 * 1024)
-        start_time = time.time()
-        for chunk in download_response.iter_content(chunk_size=chunk_size):
-            file.write(chunk)
-            downloaded += len(chunk)
-            percent = (downloaded / total_size) * 100
-            logger.info(f'{percent:.0f}% ({downloaded / 1048576:.0f}mb/{total_size / 1048576:.2f}mb)')
-        logger.info(f'File downloaded after {time.time() - start_time:.1f} seconds.')
-
-
 def download_update(latest_version: str, download_url: str, download_path: str, lock_file: str) -> None:
     ''' Downloads update from `download_url` to `download_path` and installs
         it using our updater-utility. Passes `latest_version` and `lock_file`
@@ -196,6 +224,7 @@ def download_update(latest_version: str, download_url: str, download_path: str, 
         subprocess.Popen(updater_cmd)
         return True
 
+    except InsufficientSpaceError: pass
     except:
         logger.error(f'(!) Could not download latest version. New naming format? Missing updater? {format_exc()}')
 
