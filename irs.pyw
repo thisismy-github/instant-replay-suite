@@ -7,6 +7,7 @@ import json
 import time                         # 0.125mb / 13.475mb
 import atexit
 import ctypes
+import hashlib
 import logging                      # 0.65mb  / 14.00mb
 import subprocess                   # 0.125mb / 13.475mb
 import tracemalloc                  # 0.125mb / 13.475mb
@@ -424,7 +425,7 @@ def verify_ffmpeg() -> str:
         sys.exit(3)
 
 
-def verify_config_files() -> None:
+def verify_config_files() -> str:
     ''' Displays a message if config and/or menu file is missing, then gives
         user the option to create them immediately and quit or to continue
         with default settings and a default menu. '''
@@ -452,6 +453,11 @@ def verify_config_files() -> None:
             logging.info('"No" selected on missing config/menu dialog, using defaults.')
             if NO_MENU:         # create AFTER dialog is closed to avoid confusion
                 restore_menu_file()
+
+    # hash existing config file to see if it's been modified when we exit
+    if not NO_CONFIG:
+        with open(CONFIG_PATH, 'rb') as file:
+            return hashlib.md5(file.read()).hexdigest()
 
 
 def sanitize_json(path: str, comment_prefix: str = '//',
@@ -1826,7 +1832,8 @@ if __name__ == '__main__':
     try:
         check_for_updates(manual=False)
         FFMPEG = verify_ffmpeg()
-        verify_config_files()
+        CONFIG_HASH = verify_config_files()
+        logging.info('Config file MD5 hash: ' + CONFIG_HASH)
         logging.info('FFmpeg location: ' + FFMPEG)
 
         logging.info(f'Memory usage before initializing AutoCutter class: {get_memory():.2f}mb')
@@ -1838,25 +1845,39 @@ if __name__ == '__main__':
         # ---------------------
         # Tray-icon functions
         # ---------------------
-        def quit_tray(icon):
-            ''' Quits pystray `icon`, saves history,
-                does final cleanup, and exits script. '''
-            try:                                # close icon and save history if icon exists
+        def quit_tray(icon: pystray.Icon) -> None:
+            ''' Quits pystray `icon`, saves history, checks for external
+                config modification, does final cleanup, and exits script. '''
+
+            # close icon and save history if icon exists
+            try:
                 logging.info('Closing system tray icon and exiting.')
                 tracemalloc.stop()
                 icon.visible = False
                 icon.stop()
 
+                # save history
                 logging.info(f'Clip history: {cutter.last_clips}')
                 with open(HISTORY_PATH, 'w') as history:
                     history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
+
+                # unregister cfg.write if config has been externally modified
+                with open(CONFIG_PATH, 'rb') as file:
+                    new_hash = hashlib.md5(file.read()).hexdigest()
+                    logging.info('Old config hash: ' + CONFIG_HASH)
+                    logging.info('New config hash: ' + new_hash)
+                    if new_hash != CONFIG_HASH:
+                        logging.info('Config file will not be overwritten.')
+                        atexit.unregister(cfg.write)
+            except: logging.info('(?) Harmless error while quitting tray: ' + format_exc())
+
+            # unregister quit_tray so we don't run it twice
+            try: atexit.unregister(quit_tray)
             except: pass
 
-            try: atexit.unregister(quit_tray)   # unregister quit_tray so we don't run it twice
-            except: pass
-
+            # avoid harmless yet annoying SystemExit error
             try: sys.exit(0)
-            except SystemExit: pass             # avoid harmless yet annoying SystemExit error
+            except SystemExit: pass
 
 
         def get_clip_tray_title(index: int, default: str = TRAY_RECENT_CLIP_DEFAULT_TEXT) -> str:
@@ -2088,7 +2109,6 @@ if __name__ == '__main__':
         del TRAY_ACTIONS
         del TRAY_LEFT_CLICK_ACTION
         del TRAY_MIDDLE_CLICK_ACTION
-        del CONFIG_PATH
         del CUSTOM_MENU_PATH
         del SHADOWPLAY_REGISTRY_PATH
         del NO_CONFIG
