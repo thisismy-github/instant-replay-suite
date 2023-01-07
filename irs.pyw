@@ -303,13 +303,13 @@ def about() -> None:
     if seconds_running < 60:
         time_delta_string = 'Script has been running for less than a minute'
     else:
-        d = seconds_running // 86400
-        h = seconds_running // 3600
-        m = seconds_running // 60
+        d, seconds_running = divmod(seconds_running, 86400)
+        h, seconds_running = divmod(seconds_running, 3600)
+        m, seconds_running = divmod(seconds_running, 60)
 
         suffix = f'{m:g} minute{"s" if m != 1 else ""}'
-        if h: suffix = f'{h:g} hour{"s" if m != 1 else ""}, {suffix}'
-        if d: suffix = f'{d:g} day{"s" if m != 1 else ""}, {suffix}'
+        if h: suffix = f'{h:g} hour{"s" if h != 1 else ""}, {suffix}'
+        if d: suffix = f'{d:g} day{"s" if d != 1 else ""}, {suffix}'
         time_delta_string = 'Script has been running for ' + suffix
 
     msg = (f'» {TITLE} v{VERSION} «\n{REPOSITORY_URL}\n\n---\n'
