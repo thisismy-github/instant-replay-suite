@@ -28,7 +28,10 @@ tracemalloc.start()                 # start recording memory usage AFTER librari
 
 '''
 TODO extended backup system with more than 1 undo possible at a time
-TODO add stuff for multi-track recordings
+TODO extend multi-track recording options as a submenu
+        - remove microphone and/or system audio tracks
+        - boost microphone audio by preset amounts
+        - extract tracks as separate audio files
 TODO show what "action" you can undo in the menu in some way (as a submenu?)
 TODO ability to auto-rename folders using same system as aliases
 TODO cropping ability -> pick crop region after saving instant replay OR before starting recording
@@ -172,10 +175,23 @@ def renames(old: str, new: str) -> None:
 def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
     ''' Returns a precise duration for the video at `path`.
         Returns 0 if `path` is corrupt or an invalid format. '''
-    for track in parsemedia(path, library_file=MEDIAINFO_DLL_PATH).tracks:
-        if track.track_type == "Video":
+    # a `video_tracks` attribute exists but it's just a slower version of this
+    mediainfo = parsemedia(path, library_file=MEDIAINFO_DLL_PATH)
+    for track in mediainfo.tracks:
+        if track.track_type == 'Video':
             return track.duration / 1000
     return 0
+
+
+def get_audio_tracks(path: str) -> int:
+    ''' Returns the number of audio tracks for the video at `path`. '''
+    # an `audio_tracks` attribute exists but it's just a slower version of this
+    count = 0
+    mediainfo = parsemedia(path, library_file=MEDIAINFO_DLL_PATH)
+    for track in mediainfo.tracks:
+        if track.track_type == 'Audio':
+            count += 1
+    return count
 
 
 def auto_rename_clip(path: str) -> None:
@@ -664,8 +680,9 @@ if not LENGTH_DICTIONARY:
 
 cfg.setSection(' --- Other Hotkeys --- ')
 CONCATENATE_HOTKEY = cfg.load('CONCATENATE', 'alt + c')
-UNDO_HOTKEY = cfg.load('UNDO', 'alt + u')
+MERGE_TRACKS_HOTKEY = cfg.load('MERGE_AUDIO_TRACKS', 'alt + m')
 DELETE_HOTKEY = cfg.load('DELETE', 'ctrl + alt + d')
+UNDO_HOTKEY = cfg.load('UNDO', 'alt + u')
 
 # --- Misc settings ---
 cfg.setSection(' --- General --- ')
@@ -1272,6 +1289,7 @@ class AutoCutter:
         keyboard.key_to_scan_codes = key_to_scan_codes_no_keypad
 
         keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
+        keyboard.add_hotkey(MERGE_TRACKS_HOTKEY, self.merge_clip_audio_tracks)
         keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
         keyboard.add_hotkey(UNDO_HOTKEY, self.undo)
         for key, length in LENGTH_DICTIONARY.items():
@@ -1711,6 +1729,47 @@ class AutoCutter:
             play_alert('error')
 
 
+    def merge_clip_audio_tracks(self, index=-1, patient=True):
+        ''' Merges the audio tracks of a clip at `index` for clips that
+            split the system and microphone audio intro two tracks.
+            https://stackoverflow.com/questions/54060729/ffmpeg-how-to-merge-all-audio-streams-into-stereo '''
+        try:
+            clip = self.get_clip(index, alert='Merge', min_clips=1, patient=patient)
+            clip_path = clip.path
+            track_count = get_audio_tracks(clip_path)
+            if track_count <= 1:
+                if track_count == 1:
+                    return logging.info('(?) Video only has 1 audio track.')
+                return logging.info('(?) Video has no audio tracks.')
+            logging.info(f'Merging audio tracks for clip {clip.name}...')
+
+            relative_temp_path = pjoin(clip.game, f'{time.time_ns()}.{clip.name}')
+            temp_path = pjoin(BACKUP_FOLDER, relative_temp_path)
+            renames(clip_path, temp_path)
+
+            try:
+                cmd = f'{FFMPEG} -i "{temp_path}" -filter_complex "[0:a]amerge=inputs={track_count}[a]" -ac 2 -map 0:v -map "[a]" -c:v copy "{clip_path}" -hide_banner -loglevel warning'
+                logging.info(cmd)
+                process = subprocess.Popen(cmd, shell=True)
+                process.wait()
+
+                with open(UNDO_LIST_PATH, 'w') as undo:
+                    undo.write(f'{relative_temp_path} -> {clip_path} -> Merged tracks\n')
+                self.refresh_backups(temp_path)
+
+                setctime(clip_path, clip.time)                  # ensure edited clip retains original creation time
+                clip.refresh()
+                logging.info('Audio track merging successful.\n')
+            except:
+                logging.error(f'(!) Error WHILE merging audio tracks: {format_exc()}')
+                if exists(clip_path): remove(clip_path)
+                renames(temp_path, clip_path)
+                logging.info('Successfully restored clip after error.')
+        except:
+            logging.error(f'(!) Error BEFORE merging audio tracks: {format_exc()}')
+            play_alert('error')
+
+
     def delete_clip(self, index=-1, patient=True):
         ''' Deletes a clip at the given `index`. '''
         if patient and not self.wait(alert='Delete'): return    # not a part of get_clip(), to simplify things
@@ -1786,13 +1845,16 @@ class AutoCutter:
             with open(UNDO_LIST_PATH, 'r') as undo:
                 line = undo.readline().strip().split(' -> ')
 
-                # trimming
+                # trimming/track merging
                 # - old -> unedited video's backup name
                 # - new -> new, edited video's full path
                 if len(line) == 3:
                     old, new, action = line
 
-                    alert = 'Undoing Trim' if 'trim' in action.lower() else 'Undo'
+                    action_lower = action.lower()
+                    if 'trim' in action_lower: alert = 'Undoing Trim'
+                    elif 'merge' in action_lower: alert = 'Undoing Track Merge'
+                    else: alert = 'Undo'
                     if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
 
                     if exists(new): remove(new)                 # delete edited video (if it still exists)
@@ -1968,6 +2030,7 @@ if __name__ == '__main__':
                     #pystray.MenuItem('Audio only...', lambda: cutter.???(index, patient=False)),
                     #pystray.MenuItem('Video only...', lambda: cutter.???(index, patient=False)),
                     pystray.MenuItem('Delete...', lambda: cutter.delete_clip(index, patient=False)),
+                    pystray.MenuItem('Merge tracks...', lambda: cutter.merge_clip_audio_tracks(index, patient=False)),
                     *extra_info_items
                 )
             return lambda: cutter.open_clip(index)
