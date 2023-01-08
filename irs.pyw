@@ -710,6 +710,15 @@ cfg = ConfigParseBetter(
     comment_prefixes=('//',)
 )
 
+# --- Misc settings ---
+cfg.setSection(' --- General --- ')
+AUDIO = cfg.load('AUDIO', True)
+MAX_BACKUPS = cfg.load('MAX_BACKUPS', 10)
+TRAY_RECENT_CLIP_COUNT = cfg.load('MAX_CLIPS_VISIBLE_IN_MENU', 10)
+CHECK_FOR_UPDATES_ON_LAUNCH = cfg.load('CHECK_FOR_UPDATES_ON_LAUNCH', True)
+CHECK_FOR_NEW_CLIPS_ON_LAUNCH = cfg.load('CHECK_FOR_NEW_CLIPS_ON_LAUNCH', True)
+SEND_DELETED_FILES_TO_RECYCLE_BIN = cfg.load('SEND_DELETED_FILES_TO_RECYCLE_BIN', True)
+
 # --- Hotkeys ---
 cfg.setSection(' --- Trim Hotkeys --- ')
 cfg.comment('''Usage: <hotkey> = <trim length>
@@ -746,14 +755,6 @@ CONCATENATE_HOTKEY = cfg.load('CONCATENATE', 'alt + c')
 MERGE_TRACKS_HOTKEY = cfg.load('MERGE_AUDIO_TRACKS', 'alt + m')
 DELETE_HOTKEY = cfg.load('DELETE', 'ctrl + alt + d')
 UNDO_HOTKEY = cfg.load('UNDO', 'alt + u')
-
-# --- Misc settings ---
-cfg.setSection(' --- General --- ')
-CHECK_FOR_UPDATES_ON_LAUNCH = cfg.load('CHECK_FOR_UPDATES_ON_LAUNCH', True)
-AUDIO = cfg.load('AUDIO', True)
-CHECK_FOR_NEW_CLIPS_ON_LAUNCH = cfg.load('CHECK_FOR_NEW_CLIPS_ON_LAUNCH', True)
-SEND_DELETED_FILES_TO_RECYCLE_BIN = cfg.load('SEND_DELETED_FILES_TO_RECYCLE_BIN', True)
-MAX_BACKUPS = cfg.load('MAX_BACKUPS', 10)
 
 # --- Rename formatting ---
 cfg.setSection(' --- Renaming Clips --- ')
@@ -852,8 +853,8 @@ TRAY_MIDDLE_CLICK_ACTION = cfg.load('MIDDLE_CLICK_ACTION', 'play_most_recent')
 
 # --- Recent clip menu settings ---
 cfg.setSection(' --- Tray Menu Recent Clips --- ')
-cfg.comment('''MAX_RECENT_CLIPS                      - Total number of recent clips to display in the menu
-                                         (NOT the total number of clips saved in general).
+cfg.comment('''MAX_CLIPS_VISIBLE_IN_MENU 		 - NOTE: Found in [ --- General --- ]. The total number
+                                         of recent clips to display in the menu at once.
 PLAY_RECENT_CLIPS_ON_CLICK            - Play clips on click instead of opening them in explorer.
                                          Only used if `EACH_RECENT_CLIP_HAS_SUBMENU` is False.
 EACH_RECENT_CLIP_HAS_SUBMENU          - If True, each clip will have a dedicated
@@ -869,7 +870,6 @@ SUBMENUS_DISPLAY_EXTRA_INFO           - If True, a separator and two extra lines
                                          will appear at the bottom of each clip's submenu.
 EXTRA_INFO_DATE_FORMAT                - The date format used if `SUBMENUS_DISPLAY_EXTRA_INFO`
                                          is True. See https://strftime.org/ for date formatting.''')
-TRAY_RECENT_CLIP_COUNT = cfg.load('MAX_RECENT_CLIPS', 10)
 TRAY_CLIPS_PLAY_ON_CLICK = cfg.load('PLAY_RECENT_CLIPS_ON_CLICK', True)
 TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = cfg.load('EACH_RECENT_CLIP_HAS_SUBMENU', True)
 TRAY_RECENT_CLIPS_HAVE_TRIM_SUBMENU = cfg.load('EACH_SUBMENU_HAS_TRIM_SUBMENU', True)
