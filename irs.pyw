@@ -99,7 +99,7 @@ remove = os.remove
 # Base constants
 # ---------------------
 TITLE = 'Instant Replay Suite'
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 REPOSITORY_URL = 'https://github.com/thisismy-github/instant-replay-suite'
 
 # ---
