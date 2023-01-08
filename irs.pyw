@@ -14,6 +14,7 @@ import tracemalloc                  # 0.125mb / 13.475mb
 from threading import Thread        # 0.125mb / 13.475mb
 from datetime import datetime       # 0.125mb / 13.475mb
 from traceback import format_exc    # 0.35mb  / 13.70mb     <- Heavy, but probably worth it
+from contextlib import contextmanager
 
 import pystray                      # 3.29mb  / 16.64mb
 import keyboard                     # 2.05mb  / 15.40mb
@@ -144,10 +145,72 @@ logging.basicConfig(
 get_memory = lambda: tracemalloc.get_traced_memory()[0] / 1048576
 
 
+@contextmanager
+def edit(*clips: Clip, undo_action: str):
+    ''' A context manager for editing an indeterminate number of `clips`.
+        Creates and yields a path (or list of paths) within `BACKUP_FOLDER`
+        that the given `Clip` objects have been moved to. `clips` are safely
+        restored to their original paths in the event of an error. After
+        exiting, an entry is written to the undo file with `undo_action` as
+        the suffix, while backups and our remaining `clips` are refreshed.
+
+        Usage: `with edit(clip1, undo_action='Trim') as backup_path:` '''
+
+    try:    # enter code - creating backup paths and moving the clips
+        timestamp = time.time_ns()
+        relative_paths = []
+        backup_paths = []
+        for clip in clips:
+            relative_paths.append(pjoin(clip.game, f'{timestamp}.{clip.name}'))
+            backup_paths.append(pjoin(BACKUP_FOLDER, relative_paths[-1]))
+            renames(clip.path, backup_paths[-1])
+
+        # yield control - yielding the backup paths to the user
+        if len(backup_paths) == 1: yield backup_paths[0]
+        else: yield backup_paths
+
+        # exit code - writing to the undo file and refreshing clips
+        with open(UNDO_LIST_PATH, 'w') as undo:
+            backups        = ' -> '.join(relative_paths)
+            original_paths = ' -> '.join(clip.path for clip in clips)
+            undo.write(f'{backups} -> {original_paths} -> {undo_action}\n')
+
+        cutter.refresh_backups(*backup_paths)
+        for clip in clips:
+            clip_path = clip.path
+            if exists(clip_path):
+                setctime(clip_path, clip.time)  # retain original creation time
+                clip.refresh(clip_path)
+
+    # remove any new files created and restore clips to their original paths
+    except:
+        logging.error(f'(!) Error WHILE performing edit "{undo_action}": {format_exc()}')
+        for backup_path, clip in zip(backup_paths, clips):
+            clip_path = clip.path
+            if exists(clip_path): remove(clip_path)
+            renames(backup_path, clip_path)
+        logging.info('Successfully restored clip(s) after error.')
+
+
+def ffmpeg(infile: str, cmd: str, outfile: str):
+    ''' Creates an FFmpeg command and waits for it to execute. `cmd` is the
+        main command string to pass into FFmpeg. If `infile` or `outfile` are
+        given, FFmpeg input/output parameters are generated and inserted into
+        the command. '''
+
+    in_cmd = f'-i "{infile}"' if infile else ''
+    out_cmd = f'"{outfile}"' if outfile else ''
+    cmd = f'"{FFMPEG}" -y {in_cmd} {cmd} {out_cmd} -hide_banner -loglevel warning'
+    logging.info(cmd)
+    process = subprocess.Popen(cmd, shell=True)
+    process.wait()
+
+
 def show_message(title: str, msg: str, flags: int = 0x00040030):
     ''' Displays a MessageBoxW on the screen with a `title` and
         `msg`. Default `flags` are <!-symbol + stay on top>.
         https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxw '''
+
     top_line = f'--- {title} ---'
     bottom_line = '-' * len(top_line)
     logging.info(f'Showing message box:\n\n{top_line}\n{msg}\n{bottom_line}\n')
@@ -1592,7 +1655,6 @@ class AutoCutter:
         ''' Trims `clip` down to the last `length` seconds. Clip is edited
             in-place, and the original is moved to `BACKUP_FOLDER`. '''
         try:
-            clip_path = clip.path
             clip_length = clip.length
             if clip_length <= length:
                 return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
@@ -1600,28 +1662,9 @@ class AutoCutter:
                 return logging.info('(?) Trim length must be greater than 0 seconds.')
             logging.info(f'Trimming clip {clip.name} from {clip_length:.2f} to {length} seconds...')
 
-            relative_temp_path = pjoin(clip.game, f'{time.time_ns()}.{clip.name}')
-            temp_path = pjoin(BACKUP_FOLDER, relative_temp_path)
-            renames(clip_path, temp_path)
-
-            try:
-                cmd = f'{FFMPEG} -y -i "{temp_path}" -ss {clip_length - length} -c:v copy -c:a copy "{clip_path}" -hide_banner -loglevel warning'
-                logging.info(cmd)
-                process = subprocess.Popen(cmd, shell=True)
-                process.wait()
-
-                with open(UNDO_LIST_PATH, 'w') as undo:
-                    undo.write(f'{relative_temp_path} -> {clip_path} -> Trimmed to {length:g} seconds\n')
-                self.refresh_backups(temp_path)
-
-                setctime(clip_path, clip.time)          # ensure edited clip retains original creation time
-                clip.refresh()
-                logging.info(f'Trim to {length} seconds successful.\n')
-            except:
-                logging.error(f'(!) Error WHILE trimming clip: {format_exc()}')
-                if exists(clip_path): remove(clip_path)
-                renames(temp_path, clip_path)
-                logging.info('Successfully restored clip after error.')
+            with edit(clip, undo_action=f'Trimmed to {length:g} seconds') as temp_path:
+                ffmpeg(temp_path, f'-ss {clip_length - length} -c:v copy -c:a copy', clip.path)
+            logging.info(f'Trim to {length} seconds successful.\n')
 
         except (IndexError, AssertionError): return
         except:
@@ -1670,59 +1713,28 @@ class AutoCutter:
 
 
     def concatenate_last_clips(self, index=-1, patient=True):
-        ''' 1. Get clip at `index` and clip just before that
-            2. Write clip paths to a text file
-            3. Concat files to a third temporary file using FFmpeg
-            4. Delete text file and move original clips to backup folder
-            5. Rename temporary file to the second clip's name
-            6. Remove clip at `index` from recent clips and refresh '''
+        ''' 1. Get clip at `index` and the clip just before it.
+            2. Move clips to backup folder.
+            3. Write backup paths to a text file for FFmpeg to use.
+            4. Concat files to second (earlier) clip's path.
+            5. Delete text file and refresh remaining clip. '''
         try:
             clip1 = self.get_clip(index=index - 1, alert='Concatenate', min_clips=1, patient=patient)
             clip2 = self.get_clip(index=index, min_clips=2, patient=patient)
-            clip_path1 = clip1.path
-            clip_path2 = clip2.path
-            logging.info(f'Concatenating clips "{clip_path1}" and "{clip_path2}"')
+            clip1_path = clip1.path
+            logging.info(f'Concatenating clips "{clip1_path}" and "{clip2.path}"')
 
-            base, ext = splitext(clip_path1)
-            temp_path = f'{base}_concat{ext}'       # the temporary name for our final .mp4 file
-            text_path = f'{base}_concatlist.txt'    # write list of clips to text file (with / as separator and single quotes to avoid ffmpeg errors)
-            with open(text_path, 'w') as txt:
-                txt.write(f"file '{clip_path1.replace(sep, '/')}'\nfile '{clip_path2.replace(sep, '/')}'")
+            with edit(clip1, clip2, undo_action='Concatenated') as temp_paths:
+                # write list of clips to text file (/ as separator and single quotes to avoid ffmpeg errors)
+                text_path = pjoin(CWD, f'{time.time_ns()}.concatlist.txt')
+                with open(text_path, 'w') as txt:
+                    lines = '\nfile \''.join(temp_paths).replace(sep, '/')
+                    txt.write(f"file '{lines}'")
 
-            cmd = f'{FFMPEG} -y -f concat -safe 0 -i "{text_path}" -c copy "{temp_path}" -hide_banner -loglevel warning'
-            logging.info(cmd)
-            process = subprocess.Popen(cmd, shell=True)
-            process.wait()
-            delete(text_path)
+                ffmpeg('', f'-f concat -safe 0 -i "{text_path}" -c copy', clip1_path)
+                delete(text_path)
+            logging.info('Clips concatenated, renamed, refreshed, and cleaned up successfully.')
 
-            # attempt to move first clip to backup folder
-            relative_temp_path1 = pjoin(clip1.game, f'{time.time_ns()}.{clip1.name}')
-            temp_path1 = pjoin(BACKUP_FOLDER, relative_temp_path1)
-            try: renames(clip_path1, temp_path1)
-            except:
-                delete(temp_path)                               # delete concat clip to avoid confusing user
-                logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
-                return play_alert('error')
-
-            # attempt to move second clip to backup folder
-            relative_temp_path2 = pjoin(clip2.game, f'{time.time_ns()}.{clip2.name}')
-            temp_path2 = pjoin(BACKUP_FOLDER, relative_temp_path2)
-            try: renames(clip_path2, temp_path2)
-            except:
-                delete(temp_path)                               # delete concat clip to avoid confusing user
-                renames(temp_path1, clip_path1)                 # restore first clip if second clip failed
-                logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
-                return play_alert('error')
-
-            with open(UNDO_LIST_PATH, 'w') as undo:
-                undo.write(f'{relative_temp_path1} -> {relative_temp_path2} -> {clip_path1} -> {clip_path2} -> Concatenated\n')
-            self.refresh_backups(temp_path1, temp_path2)
-
-            renames(temp_path, clip_path1)
-            setctime(clip_path1, getstat(temp_path1).st_ctime)  # ensure edited clip retains original creation time
-            self.pop(index)
-            clip1.refresh(clip_path1)                           # pass `clip_path1` as slight optimization
-            logging.info('Clips concatenated, renamed, popped, refreshed, and cleaned up successfully.')
         except AssertionError: return
         except:
             logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
@@ -1743,28 +1755,10 @@ class AutoCutter:
                 return logging.info('(?) Video has no audio tracks.')
             logging.info(f'Merging audio tracks for clip {clip.name}...')
 
-            relative_temp_path = pjoin(clip.game, f'{time.time_ns()}.{clip.name}')
-            temp_path = pjoin(BACKUP_FOLDER, relative_temp_path)
-            renames(clip_path, temp_path)
+            with edit(clip, undo_action='Merged tracks') as temp_path:
+                ffmpeg(temp_path, f'-filter_complex "[0:a]amerge=inputs={track_count}[a]" -ac 2 -map 0:v -map "[a]" -c:v copy', clip_path)
+            logging.info('Audio track merging successful.\n')
 
-            try:
-                cmd = f'{FFMPEG} -i "{temp_path}" -filter_complex "[0:a]amerge=inputs={track_count}[a]" -ac 2 -map 0:v -map "[a]" -c:v copy "{clip_path}" -hide_banner -loglevel warning'
-                logging.info(cmd)
-                process = subprocess.Popen(cmd, shell=True)
-                process.wait()
-
-                with open(UNDO_LIST_PATH, 'w') as undo:
-                    undo.write(f'{relative_temp_path} -> {clip_path} -> Merged tracks\n')
-                self.refresh_backups(temp_path)
-
-                setctime(clip_path, clip.time)                  # ensure edited clip retains original creation time
-                clip.refresh()
-                logging.info('Audio track merging successful.\n')
-            except:
-                logging.error(f'(!) Error WHILE merging audio tracks: {format_exc()}')
-                if exists(clip_path): remove(clip_path)
-                renames(temp_path, clip_path)
-                logging.info('Successfully restored clip after error.')
         except:
             logging.error(f'(!) Error BEFORE merging audio tracks: {format_exc()}')
             play_alert('error')
