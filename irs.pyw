@@ -28,6 +28,12 @@ from configparsebetter import ConfigParseBetter
 tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 '''
+TODO !!! deleting a video removes WRONG video if you open while a new clip is being scanned (since the index changes)
+TODO deleting a video removes entry even if video fails to be deleted
+TODO add "clear duplicate entries" menu item
+TODO !!! backups do not get deleted in correct order with new folder structure system
+TODO open settings/open menu settings options
+TODO custom TTS alert for access errors
 TODO extended backup system with more than 1 undo possible at a time
 TODO extend multi-track recording options as a submenu
         - remove microphone and/or system audio tracks
@@ -63,8 +69,8 @@ TODO pystray subclass improvements
 #  Custom keyboard listener
 #  Clip class
 #  Main class
-#      Helper methods
-#      Acquiring clips
+#      Clip helper methods
+#      Scanning for clips
 #      Clip actions
 #  Tray-icon functions
 #  Tray-icon setup
@@ -167,7 +173,7 @@ def edit(*clips: Clip, undo_action: str):
 
         # yield control - yielding the backup paths to the user
         if len(backup_paths) == 1: yield backup_paths[0]
-        else: yield backup_paths
+        else:                      yield backup_paths
 
         # exit code - writing to the undo file and refreshing clips
         with open(UNDO_LIST_PATH, 'w') as undo:
@@ -179,7 +185,7 @@ def edit(*clips: Clip, undo_action: str):
         for clip in clips:
             clip_path = clip.path
             if exists(clip_path):
-                setctime(clip_path, clip.time)  # retain original creation time
+                setctime(clip_path, clip.time)      # retain original creation time
                 clip.refresh(clip_path)
 
     # remove any new files created and restore clips to their original paths
@@ -187,9 +193,28 @@ def edit(*clips: Clip, undo_action: str):
         logging.error(f'(!) Error WHILE performing edit "{undo_action}": {format_exc()}')
         for backup_path, clip in zip(backup_paths, clips):
             clip_path = clip.path
-            if exists(clip_path): remove(clip_path)
+            if exists(clip_path):
+                remove(clip_path)
             renames(backup_path, clip_path)
         logging.info('Successfully restored clip(s) after error.')
+
+
+def index_safe(log_message: str):
+    ''' Decorator for handling methods that involve clip-access. Safely discards
+        IndexErrors and AssertionErrors, two "common" exceptions that can occur
+        while handling clips. Plays an error sound and Logs `log_message` for
+        other exceptions. Returns None for any type of exception. '''
+    def actual_decorator(func):
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except (IndexError, AssertionError):
+                return
+            except:
+                logging.error(f'(!) Error while {log_message}: {format_exc()}')
+                play_alert('error')
+        return wrapper
+    return actual_decorator
 
 
 def ffmpeg(infile: str, cmd: str, outfile: str):
@@ -217,7 +242,7 @@ def show_message(title: str, msg: str, flags: int = 0x00040030):
     return ctypes.windll.user32.MessageBoxW(None, msg, title, flags)
 
 
-def delete(path: str) -> None:
+def delete(path: str):
     ''' Robustly deletes a given `path`. '''
     logging.info('Deleting: ' + path)
     try:
@@ -228,14 +253,16 @@ def delete(path: str) -> None:
         play_alert('error')
 
 
-def renames(old: str, new: str) -> None:
+def renames(old: str, new: str):
     ''' `os.py`'s super-rename, but without deleting empty directories. '''
     head, tail = splitpath(new)
-    if head and tail and not exists(head): makedirs(head)
+    if head and tail and not exists(head):
+        makedirs(head)
     rename(old, new)
 
 
-def get_video_duration(path: str) -> float:     # ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
+# ? -> https://stackoverflow.com/questions/10075176/python-native-library-to-read-metadata-from-videos
+def get_video_duration(path: str) -> float:
     ''' Returns a precise duration for the video at `path`.
         Returns 0 if `path` is corrupt or an invalid format. '''
     # a `video_tracks` attribute exists but it's just a slower version of this
@@ -257,7 +284,7 @@ def get_audio_tracks(path: str) -> int:
     return count
 
 
-def auto_rename_clip(path: str) -> None:
+def auto_rename_clip(path: str) -> tuple[str, str]:
     ''' Renames `path` according to `RENAME_FORMAT` and `RENAME_DATE_FORMAT`,
         so long as `path` ends with a date formatted as `%Y.%m.%d - %H.%M.%S`,
         which is found at the end of all ShadowPlay clip names. '''
@@ -268,7 +295,8 @@ def auto_rename_clip(path: str) -> None:
         date_string = ' '.join(parts[-3:])
         date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
         game = ' '.join(parts[:-3])
-        if game.lower() in GAME_ALIASES: game = GAME_ALIASES[game.lower()]
+        if game.lower() in GAME_ALIASES:
+            game = GAME_ALIASES[game.lower()]
 
         renamed_base_no_ext = RENAME_FORMAT.replace('?game', game).replace('?date', date.strftime(RENAME_DATE_FORMAT))
         renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
@@ -284,7 +312,8 @@ def auto_rename_clip(path: str) -> None:
             while True:
                 count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS + (1 if count >= 0 else 2))
                 renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
-                if not exists(renamed_path) and renamed_path not in protected_paths: break
+                if not exists(renamed_path) and renamed_path not in protected_paths:
+                    break
                 count += 1
 
         renamed_base = basename(renamed_path)
@@ -292,12 +321,13 @@ def auto_rename_clip(path: str) -> None:
         rename(path, renamed_path)                  # super-rename not needed
         logging.info('Rename successful.')
         return abspath(renamed_path), renamed_base  # use abspath to ensure consistent path formatting later on
+
     except Exception as error:
         logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
         return path, basename(path)
 
 
-def play_alert(sound: str, default: str = None) -> None:
+def play_alert(sound: str, default: str = None):
     ''' Plays a system-wide audio alert. `sound` is the filename of a WAV file
         located within `RESOURCE_FOLDER`. Uses `default` if `sound` doesn't
         exist. Falls back to a generic OS alert if `default` isn't provided
@@ -305,7 +335,7 @@ def play_alert(sound: str, default: str = None) -> None:
         "error.wav" doesn't exist, a generic OS error sound is used. '''
 
     if not AUDIO: return
-    sound = str(sound).lower()          # not actually necessary on Windows
+    sound = str(sound).lower()                      # not actually necessary on Windows
     path = pjoin(RESOURCE_FOLDER, f'{sound}.wav')
     if not exists(path) and default is not None:
         sound = str(default).lower()
@@ -313,9 +343,10 @@ def play_alert(sound: str, default: str = None) -> None:
     logging.info('Playing alert: ' + path)
 
     if exists(path):
-        try: winsound.PlaySound(path, winsound.SND_ASYNC)
-        except:
-            winsound.MessageBeep(winsound.MB_ICONHAND)      # play OS error sound
+        try:
+            winsound.PlaySound(path, winsound.SND_ASYNC)
+        except:                                     # play OS error sound instead
+            winsound.MessageBeep(winsound.MB_ICONHAND)
             logging.error(f'(!) Error while playing alert {path}: {format_exc()}')
     else:       # generic OS alert for missing file, OS error for actual errors
         if sound == 'error': winsound.MessageBeep(winsound.MB_ICONHAND)
@@ -323,7 +354,7 @@ def play_alert(sound: str, default: str = None) -> None:
         logging.warning('(!) Alert doesn\'t exist at path ' + path)
 
 
-def check_for_updates(manual: bool = True) -> None:
+def check_for_updates(manual: bool = True):
     ''' Checks for updates and notifies user if one is found. If compiled,
         user may download and install the update automatically, prompting
         us to exit while it occurs. Also checks for `update_report.txt`,
@@ -356,8 +387,8 @@ def check_for_updates(manual: bool = True) -> None:
             if not IS_COMPILED:
                 update.check_for_update(manual)
 
-            else:                               # if compiled, override cacert.pem path...
-                import certifi.core             # ...to get rid of a pointless folder
+            else:                                   # if compiled, override cacert.pem path...
+                import certifi.core                 # ...to get rid of a pointless folder
                 cacert_override_path = pjoin(BIN_FOLDER, 'cacert.pem')
                 os.environ["REQUESTS_CA_BUNDLE"] = cacert_override_path
                 certifi.core.where = lambda: cacert_override_path
@@ -367,14 +398,14 @@ def check_for_updates(manual: bool = True) -> None:
                 lock_file = pjoin(BIN_FOLDER, f'{time.time_ns()}.updatecheck.txt')
                 with open(lock_file, 'w'):
                     exit_code = update.check_for_update(manual, lock_file=lock_file)
-                    if exit_code is not None:   # make sure we don't write a fresh...
-                        if not manual:          # ...config if we're about to update
+                    if exit_code is not None:       # make sure we don't write a fresh...
+                        if not manual:              # ...config if we're about to update
                             atexit.unregister(cfg.write)
                         sys.exit(exit_code)
-                os.remove(lock_file)            # remove lock file if we didn't close
+                os.remove(lock_file)                # remove lock file if we didn't close
 
 
-def about() -> None:
+def about():
     ''' Displays an "About" window with various information/statistics. '''
     seconds_running = time.time() - SCRIPT_START_TIME
     clip_count = len(cutter.last_clips)
@@ -401,7 +432,7 @@ def about() -> None:
 # ---------------------
 # Temporary functions
 # ---------------------
-def abort_launch(code: int, title: str, msg: str, flags: int = 0x00040010) -> None:
+def abort_launch(code: int, title: str, msg: str, flags: int = 0x00040010):
     ''' Checks for updates, then displays/logs a `msg` with `title` using
         `flags`, then exits with exit code `code`. Default `flags` are
         <X-symbol + stay on top>. Only to be used during launch. '''
@@ -422,27 +453,29 @@ def verify_ffmpeg() -> str:
         try:
             if 'ffmpeg.exe' in listdir(path):
                 return pjoin(path, 'ffmpeg.exe')
-        except: pass
+        except:
+            pass
     for root, dirs, files in os.walk(CWD):
-        if root == CWD: continue
+        if root == CWD:
+            continue
         if 'ffmpeg.exe' in files:
             return pjoin(root, 'ffmpeg.exe')
 
     # ffmpeg not detected, download/extract it if we're compiled
-    msg = (f"FFmpeg was not detected. FFmpeg is required for {TITLE}'s "
-           "editing features. Please ensure \"ffmpeg.exe\" is either in "
-           f"your install folder or your system PATH variable.")
-    if not IS_COMPILED:                 # don't write fresh config
+    msg = (f'FFmpeg was not detected. FFmpeg is required for {TITLE}\'s '
+           'editing features. Please ensure "ffmpeg.exe" is either in '
+           f'your install folder or your system PATH variable.')
+    if not IS_COMPILED:                             # don't write fresh config
         if NO_CONFIG: atexit.unregister(cfg.write)
         show_message('FFmpeg not detected', msg)
         sys.exit(3)
     else:
         # ?-symbol, stay on top, Yes/No
-        msg += ("\n\nWould you like to automatically download the "
-                "latest build of FFmpeg to the \"bin\" folder?")
+        msg += ('\n\nWould you like to automatically download the '
+                'latest build of FFmpeg to the "bin" folder?')
         response = show_message('FFmpeg not detected', msg, 0x00040024)
 
-        if response == 6:               # Yes
+        if response == 6:                           # Yes
             download_url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
             download_path = pjoin(CWD, f'ffmpeg.{time.time_ns()}.zip')
 
@@ -485,17 +518,18 @@ def verify_ffmpeg() -> str:
                 os.remove(download_path)
 
                 # flags are i-symbol, stay on top
-                msg = ("FFmpeg has been successfully downloaded. "
-                       f"Size: {getsize(final_path) / 1048576:.1f}mb"
-                       f"\n\n{final_path}")
+                msg = ('FFmpeg has been successfully downloaded. '
+                       f'Size: {getsize(final_path) / 1048576:.1f}mb'
+                       f'\n\n{final_path}')
                 show_message('FFmpeg download successful', msg, 0x00040040)
                 return final_path
 
-            except update.InsufficientSpaceError: pass
+            except update.InsufficientSpaceError:
+                pass
             except Exception as error:
                 # X-symbol, stay on top
-                msg = (f"FFmpeg download from \"{download_url}\" to \""
-                       f"{download_path}\" failed:\n\n{type(error)}: {error}")
+                msg = (f'FFmpeg download from "{download_url}" to '
+                       f'"{download_path}" failed:\n\n{type(error)}: {error}')
                 show_message('FFmpeg download failed', msg, 0x00040010)
 
                 if exists(download_path):
@@ -503,7 +537,8 @@ def verify_ffmpeg() -> str:
                     except: logging.warning(f'(!) FFmpeg download at "{download_path}" could not be removed')
 
         # exit if "No" is pressed or we errored out (and don't write a fresh config)
-        if NO_CONFIG: atexit.unregister(cfg.write)
+        if NO_CONFIG:
+            atexit.unregister(cfg.write)
         sys.exit(3)
 
 
@@ -515,14 +550,14 @@ def verify_config_files() -> str:
     logging.info('Verifying config.settings and config.menu...')
     if NO_CONFIG or NO_MENU:
         if NO_CONFIG and NO_MENU: parts = ('config file or a menu file', 'them', 'files')
-        elif NO_CONFIG: parts = ('config file', 'it', 'file')
-        else: parts = ('menu file', 'it', 'file')
+        elif NO_CONFIG:           parts = ('config file', 'it', 'file')
+        else:                     parts = ('menu file', 'it', 'file')
         string1, string2, string3 = parts
 
-        msg = (f"You do not have a {string1}. Would you like to exit {TITLE} "
-               f"to create {string2} and review them now?\n\n"
-               "Press 'No' if you want to continue with the default settings "
-               f"(the necessary {string3} will be created on exit).")
+        msg = (f'You do not have a {string1}. Would you like to exit {TITLE} '
+               f'to create {string2} and review them now?\n\n'
+               'Press \'No\' if you want to continue with the default settings '
+               f'(the necessary {string3} will be created on exit).')
 
         # ?-symbol, stay on top, Yes/No
         response = show_message('Missing config/menu files', msg, 0x00040024)
@@ -542,8 +577,11 @@ def verify_config_files() -> str:
             return hashlib.md5(file.read()).hexdigest()
 
 
-def sanitize_json(path: str, comment_prefix: str = '//',
-                  allow_headless_lines: bool = True) -> list:
+def sanitize_json(
+    path: str,
+    comment_prefix: str = '//',
+    allow_headless_lines: bool = True
+) -> list[tuple(str, str)]:
     ''' Reads a JSON file at `path`, but fixes common errors/typos while
         allowing comments and value-only lines (if `allow_headless_lines` is
         True). Lines with `comment_prefix` are ignored. Returns the raw list
@@ -563,7 +601,7 @@ def sanitize_json(path: str, comment_prefix: str = '//',
 
         # ensure all nested dictionaries have exactly one trailing comma
         line = line.replace('}', '},')
-        while ' ,' in line: line = line.replace(' ,', ',')
+        while ' ,' in line:  line = line.replace(' ,', ',')
         while '},,' in line: line = line.replace('},,', '},')
         json_lines.append(line)
 
@@ -571,8 +609,8 @@ def sanitize_json(path: str, comment_prefix: str = '//',
     json_string = '\n'.join(json_lines).rstrip().rstrip(',').rstrip('}') + '}'
 
     # remove trailing comma from final element of every dictionary
-    comma_index = json_string.find(',')     # string ends with }, so we'll...
-    bracket_index = json_string.find('}')   # ...run out of commas first
+    comma_index = json_string.find(',')             # string ends with }, so we'll...
+    bracket_index = json_string.find('}')           # ...run out of commas first
     while comma_index != -1:
         next_comma_index = json_string.find(',', comma_index + 1)
         if next_comma_index > bracket_index or next_comma_index == -1:
@@ -589,20 +627,21 @@ def sanitize_json(path: str, comment_prefix: str = '//',
     return json.loads(json_string, object_pairs_hook=lambda pairs: pairs)
 
 
-def load_menu() -> list:
+def load_menu() -> list[tuple(str, str)]:
     ''' Parse menu at `CUSTOM_MENU_PATH` and warn/exit if parsing fails. '''
-    try: return sanitize_json(CUSTOM_MENU_PATH, '//')
+    try:
+        return sanitize_json(CUSTOM_MENU_PATH, '//')
     except json.decoder.JSONDecodeError as error:
-        msg = ("Error while reading your custom menu file "
-               f"({CUSTOM_MENU_PATH}):\n\nJSONDecodeError - {error}"
-               "\n\nThe custom menu file follows JSON syntax. If you "
-               "need to reset your menu file, delete your existing "
-               f"one and restart {TITLE} to generate a fresh copy.")
+        msg = ('Error while reading your custom menu file '
+               f'({CUSTOM_MENU_PATH}):\n\nJSONDecodeError - {error}'
+               '\n\nThe custom menu file follows JSON syntax. If you '
+               'need to reset your menu file, delete your existing '
+               f'one and restart {TITLE} to generate a fresh copy.')
         show_message('Invalid Menu File', msg, 0x00040010)
-        sys.exit(2)                         # ^ X-symbol, stay on top
+        sys.exit(2)                                 # ^ X-symbol, stay on top
 
 
-def restore_menu_file() -> None:
+def restore_menu_file():
     ''' Creates a fresh menu file at `CUSTOM_MENU_PATH`. '''
     logging.info(f'Creating fresh menu file at {CUSTOM_MENU_PATH}...')
     with open(CUSTOM_MENU_PATH, 'w') as file:
@@ -712,11 +751,11 @@ cfg = ConfigParseBetter(
 
 # --- Misc settings ---
 cfg.setSection(' --- General --- ')
-AUDIO = cfg.load('AUDIO', True)
-MAX_BACKUPS = cfg.load('MAX_BACKUPS', 10)
-TRAY_RECENT_CLIP_COUNT = cfg.load('MAX_CLIPS_VISIBLE_IN_MENU', 10)
-CHECK_FOR_UPDATES_ON_LAUNCH = cfg.load('CHECK_FOR_UPDATES_ON_LAUNCH', True)
-CHECK_FOR_NEW_CLIPS_ON_LAUNCH = cfg.load('CHECK_FOR_NEW_CLIPS_ON_LAUNCH', True)
+AUDIO =                             cfg.load('AUDIO', True)
+MAX_BACKUPS =                       cfg.load('MAX_BACKUPS', 10)
+TRAY_RECENT_CLIP_COUNT =            cfg.load('MAX_CLIPS_VISIBLE_IN_MENU', 10)
+CHECK_FOR_UPDATES_ON_LAUNCH =       cfg.load('CHECK_FOR_UPDATES_ON_LAUNCH', True)
+CHECK_FOR_NEW_CLIPS_ON_LAUNCH =     cfg.load('CHECK_FOR_NEW_CLIPS_ON_LAUNCH', True)
 SEND_DELETED_FILES_TO_RECYCLE_BIN = cfg.load('SEND_DELETED_FILES_TO_RECYCLE_BIN', True)
 
 # --- Hotkeys ---
@@ -751,10 +790,10 @@ if not LENGTH_DICTIONARY:
         cfg.load(name, alias)
 
 cfg.setSection(' --- Other Hotkeys --- ')
-CONCATENATE_HOTKEY = cfg.load('CONCATENATE', 'alt + c')
+CONCATENATE_HOTKEY =  cfg.load('CONCATENATE', 'alt + c')
 MERGE_TRACKS_HOTKEY = cfg.load('MERGE_AUDIO_TRACKS', 'alt + m')
-DELETE_HOTKEY = cfg.load('DELETE', 'ctrl + alt + d')
-UNDO_HOTKEY = cfg.load('UNDO', 'alt + u')
+DELETE_HOTKEY =       cfg.load('DELETE', 'ctrl + alt + d')
+UNDO_HOTKEY =         cfg.load('UNDO', 'alt + u')
 
 # --- Rename formatting ---
 cfg.setSection(' --- Renaming Clips --- ')
@@ -767,10 +806,10 @@ cfg.comment('''NAME_FORMAT variables:
              when the clip's name already exists. Best used when ?date
              is absent or isn't very specific (by default, DATE_FORMAT
              only saves the day, not the exact time of a clip).''')
-RENAME = cfg.load('AUTO_RENAME_CLIPS', True)
-USE_GAME_ALIASES = cfg.load('USE_GAME_ALIASES', True)
-RENAME_FORMAT = cfg.load('NAME_FORMAT', '?game ?date #?count')
-RENAME_DATE_FORMAT = cfg.load('DATE_FORMAT', '%y.%m.%d')
+RENAME =                    cfg.load('AUTO_RENAME_CLIPS', True)
+USE_GAME_ALIASES =          cfg.load('USE_GAME_ALIASES', True)
+RENAME_FORMAT =             cfg.load('NAME_FORMAT', '?game ?date #?count')
+RENAME_DATE_FORMAT =        cfg.load('DATE_FORMAT', '%y.%m.%d')
 RENAME_COUNT_START_NUMBER = cfg.load('COUNT_START_NUMBER', 1)
 RENAME_COUNT_PADDED_ZEROS = cfg.load('COUNT_PADDED_ZEROS', 1)
 
@@ -793,22 +832,23 @@ if USE_GAME_ALIASES:    # lowercase and remove double-spaces from names
         }
         for name, alias in GAME_ALIASES.items():
             cfg.load(name, alias)
-else: GAME_ALIASES = {}
+else:
+    GAME_ALIASES = {}
 
 # --- Paths ---
 cfg.setSection(' --- Paths --- ')
-ICON_PATH = cfg.load('CUSTOM_ICON', '' if IS_COMPILED else 'executable\\icon_main.ico', remove='"')
-BACKUP_FOLDER = cfg.load('BACKUP_FOLDER', 'Backups', remove='"')
-HISTORY_PATH = cfg.load('HISTORY', 'history.txt', remove='"')
+ICON_PATH =      cfg.load('CUSTOM_ICON', '' if IS_COMPILED else 'executable\\icon_main.ico', remove='"')
+BACKUP_FOLDER =  cfg.load('BACKUP_FOLDER', 'Backups', remove='"')
+HISTORY_PATH =   cfg.load('HISTORY', 'history.txt', remove='"')
 UNDO_LIST_PATH = cfg.load('UNDO_LIST', 'undo.txt', remove='"')
 
 cfg.setSection(' --- Special Folders --- ')
 cfg.comment('''These only apply if the associated path
 in [Paths] is not an absolute path.''')
-SAVE_HISTORY_TO_APPDATA_FOLDER = cfg.load('SAVE_HISTORY_TO_APPDATA_FOLDER', False)
+SAVE_HISTORY_TO_APPDATA_FOLDER =   cfg.load('SAVE_HISTORY_TO_APPDATA_FOLDER', False)
 SAVE_UNDO_LIST_TO_APPDATA_FOLDER = cfg.load('SAVE_UNDO_LIST_TO_APPDATA_FOLDER', False)
-SAVE_BACKUPS_TO_APPDATA_FOLDER = cfg.load('SAVE_BACKUPS_TO_APPDATA_FOLDER', False)
-SAVE_BACKUPS_TO_VIDEO_FOLDER = cfg.load('SAVE_BACKUPS_TO_VIDEO_FOLDER', BACKUP_FOLDER_HINT)
+SAVE_BACKUPS_TO_APPDATA_FOLDER =   cfg.load('SAVE_BACKUPS_TO_APPDATA_FOLDER', False)
+SAVE_BACKUPS_TO_VIDEO_FOLDER =     cfg.load('SAVE_BACKUPS_TO_VIDEO_FOLDER', BACKUP_FOLDER_HINT)
 
 cfg.setSection(' --- Ignored Folders --- ')
 cfg.comment('''Subfolders in the video folder that will be ignored during scans.
@@ -829,8 +869,8 @@ TRAY_ADVANCED_MODE = cfg.load('USE_CUSTOM_MENU', True)
 
 # --- Basic mode (TRAY_ADVANCED_MODE = False) only ---
 cfg.comment('Only used if `USE_CUSTOM_MENU` is False:', before='\n')
-TRAY_SHOW_QUICK_ACTIONS = cfg.load('SHOW_QUICK_ACTIONS', True)
-TRAY_RECENT_CLIPS_IN_SUBMENU = cfg.load('PUT_RECENT_CLIPS_IN_SUBMENU', False)
+TRAY_SHOW_QUICK_ACTIONS =       cfg.load('SHOW_QUICK_ACTIONS', True)
+TRAY_RECENT_CLIPS_IN_SUBMENU =  cfg.load('PUT_RECENT_CLIPS_IN_SUBMENU', False)
 TRAY_QUICK_ACTIONS_IN_SUBMENU = cfg.load('PUT_QUICK_ACTIONS_IN_SUBMENU', True)
 
 cfg.comment('''Valid left-click and middle-click actions:
@@ -848,7 +888,7 @@ cfg.comment('''Valid left-click and middle-click actions:
     'check_for_updates':    Checks for a new release on GitHub to install.
     'about':                Shows an "About" window.
     'quit':                 Exits this program.''', before='\n')
-TRAY_LEFT_CLICK_ACTION = cfg.load('LEFT_CLICK_ACTION', 'open_video_folder')
+TRAY_LEFT_CLICK_ACTION =   cfg.load('LEFT_CLICK_ACTION', 'open_video_folder')
 TRAY_MIDDLE_CLICK_ACTION = cfg.load('MIDDLE_CLICK_ACTION', 'play_most_recent')
 
 # --- Recent clip menu settings ---
@@ -870,12 +910,12 @@ SUBMENUS_DISPLAY_EXTRA_INFO           - If True, a separator and two extra lines
                                          will appear at the bottom of each clip's submenu.
 EXTRA_INFO_DATE_FORMAT                - The date format used if `SUBMENUS_DISPLAY_EXTRA_INFO`
                                          is True. See https://strftime.org/ for date formatting.''')
-TRAY_CLIPS_PLAY_ON_CLICK = cfg.load('PLAY_RECENT_CLIPS_ON_CLICK', True)
-TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS = cfg.load('EACH_RECENT_CLIP_HAS_SUBMENU', True)
-TRAY_RECENT_CLIPS_HAVE_TRIM_SUBMENU = cfg.load('EACH_SUBMENU_HAS_TRIM_SUBMENU', True)
+TRAY_CLIPS_PLAY_ON_CLICK =                           cfg.load('PLAY_RECENT_CLIPS_ON_CLICK', True)
+TRAY_RECENT_CLIPS_HAVE_UNIQUE_SUBMENUS =             cfg.load('EACH_RECENT_CLIP_HAS_SUBMENU', True)
+TRAY_RECENT_CLIPS_HAVE_TRIM_SUBMENU =                cfg.load('EACH_SUBMENU_HAS_TRIM_SUBMENU', True)
 TRAY_RECENT_CLIPS_TRIM_SUBMENU_FORCE_CUSTOM_LENGTH = cfg.load('TRIM_SUBMENU_ALWAYS_HAS_CUSTOM_LENGTH', True)
-TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO = cfg.load('SUBMENUS_DISPLAY_EXTRA_INFO', True)
-TRAY_EXTRA_INFO_DATE_FORMAT = cfg.load('EXTRA_INFO_DATE_FORMAT', '%a %#D %#I:%M:%S%p')
+TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO =               cfg.load('SUBMENUS_DISPLAY_EXTRA_INFO', True)
+TRAY_EXTRA_INFO_DATE_FORMAT =                        cfg.load('EXTRA_INFO_DATE_FORMAT', '%a %#D %#I:%M:%S%p')
 cfg.comment('''RECENT_CLIP_NAME_FORMAT variables:
     ?date         - "1/17/22 12:09am" (RECENT_CLIP_DATE_FORMAT only, see https://strftime.org/)
     ?recency      - "2 days ago"
@@ -885,16 +925,16 @@ cfg.comment('''RECENT_CLIP_NAME_FORMAT variables:
     ?clip         - The clip's basename.
     ?clipdir      - The clip's name and immediate parent directory only.
     ?clippath     - The clip's full path.''', before='\n')
-TRAY_RECENT_CLIP_NAME_FORMAT = cfg.load('RECENT_CLIP_NAME_FORMAT', '(?recencyshort) - ?clip')
-TRAY_RECENT_CLIP_DATE_FORMAT = cfg.load('RECENT_CLIP_DATE_FORMAT', '%#I:%M%p')
+TRAY_RECENT_CLIP_NAME_FORMAT =  cfg.load('RECENT_CLIP_NAME_FORMAT', '(?recencyshort) - ?clip')
+TRAY_RECENT_CLIP_DATE_FORMAT =  cfg.load('RECENT_CLIP_DATE_FORMAT', '%#I:%M%p')
 TRAY_RECENT_CLIP_DEFAULT_TEXT = cfg.load('EMPTY_SLOT_TEXT', ' --')
 
 # --- Registry setting overrides ---
 cfg.setSection(' --- Registry Overrides --- ')
 cfg.comment('Used for overriding values obtained from the registry.')
-VIDEO_FOLDER_OVERRIDE = cfg.load('VIDEO_FOLDER_OVERRIDE')
+VIDEO_FOLDER_OVERRIDE =          cfg.load('VIDEO_FOLDER_OVERRIDE')
 INSTANT_REPLAY_HOTKEY_OVERRIDE = cfg.load('INSTANT_REPLAY_HOTKEY_OVERRIDE')
-TRAY_ALIGN_CENTER = cfg.load('ALWAYS_CENTER_ALIGN_TRAY_MENU_ON_OPEN', False)
+TRAY_ALIGN_CENTER =              cfg.load('ALWAYS_CENTER_ALIGN_TRAY_MENU_ON_OPEN', False)
 
 # --- Log config reading duration ---
 logging.info(f'Config read in {time.time() - config_read_start:.3f} seconds.')
@@ -908,11 +948,12 @@ if VIDEO_FOLDER_OVERRIDE:
     VIDEO_FOLDER = VIDEO_FOLDER_OVERRIDE.strip()
     logging.info('Overridden video directory: ' + VIDEO_FOLDER)
 elif VIDEO_FOLDER is None:
-    msg = ("ShadowPlay video path could not be read from your registry:\n\n"
-           f"HKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\DefaultPathW."
-           "\n\nPlease set `VIDEO_FOLDER_OVERRIDE` in your config file.")
+    msg = ('ShadowPlay video path could not be read from your registry:\n\n'
+           f'HKEY_CURRENT_USER\\{SHADOWPLAY_REGISTRY_PATH}\\DefaultPathW.'
+           '\n\nPlease set `VIDEO_FOLDER_OVERRIDE` in your config file.')
     abort_launch(2, 'No Video Folder Detected', msg)
-else: logging.info('Video directory: ' + VIDEO_FOLDER)
+else:
+    logging.info('Video directory: ' + VIDEO_FOLDER)
 
 
 # get Instant Replay hotkey from registry (each key is a separate value)
@@ -935,8 +976,8 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
         for key_number in range(total_keys):
             hotkey_part = winreg.QueryValueEx(key, f'DVRHKey{key_number}')[0].decode('utf-16')[:-1]
             if hotkey_part in modifier_keys: hotkey.append(modifier_keys[hotkey_part])
-            elif not hotkey_part.isupper(): hotkey.append(f_keys[hotkey_part])
-            else: hotkey.append(hotkey_part)
+            elif not hotkey_part.isupper():  hotkey.append(f_keys[hotkey_part])
+            else:                            hotkey.append(hotkey_part)
         INSTANT_REPLAY_HOTKEY = ' + '.join(hotkey)
 
     except:
@@ -945,7 +986,8 @@ if not INSTANT_REPLAY_HOTKEY_OVERRIDE:
                "DVRHKey___\n\nPlease set `INSTANT_REPLAY_HOTKEY_OVERRIDE` in "
                "your config file.\n\nFull error traceback: " + format_exc())
         abort_launch(2, 'No Instant-Replay Hotkey Detected', msg)
-else: INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
+else:
+    INSTANT_REPLAY_HOTKEY = INSTANT_REPLAY_HOTKEY_OVERRIDE.strip().lower()
 logging.info(f'Instant replay hotkey: "{INSTANT_REPLAY_HOTKEY}"')
 
 
@@ -958,8 +1000,9 @@ else:
 
         # top-right alignment adjusts itself automatically for all EXCEPT left taskbars
         if taskbar_position == 0: MENU_ALIGNMENT = win32.TPM_LEFTALIGN | win32.TPM_BOTTOMALIGN
-        else: MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
-    except: logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
+        else:                     MENU_ALIGNMENT = win32.TPM_RIGHTALIGN | win32.TPM_TOPALIGN
+    except:
+        logging.warning(f'Could not detect taskbar position for menu-alignment: {format_exc()}')
 logging.info(f'Menu alignment: {MENU_ALIGNMENT}')
 
 
@@ -991,7 +1034,8 @@ if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
 
 # constructing icon path -> first try resource folder, then CWD
 # NOTE: pystray won't use our .exe icon if `ICON_PATH` is empty/None
-if splitdrive(ICON_PATH)[0]: ICON_PATH = abspath(ICON_PATH)
+if splitdrive(ICON_PATH)[0]:
+    ICON_PATH = abspath(ICON_PATH)
 elif ICON_PATH:
     new_path = pjoin(RESOURCE_FOLDER, ICON_PATH)
     if not exists(new_path):
@@ -1007,10 +1051,10 @@ if not IS_COMPILED and (not exists(ICON_PATH) or not os.path.isfile(ICON_PATH)):
     abort_launch(3, 'No icon detected', msg)
 
 # ensuring backup folder is valid
-if exists(BACKUP_FOLDER): BACKUP_FOLDER = abspath(BACKUP_FOLDER)
-elif SAVE_BACKUPS_TO_VIDEO_FOLDER: BACKUP_FOLDER = pjoin(VIDEO_FOLDER, BACKUP_FOLDER)
+if exists(BACKUP_FOLDER):            BACKUP_FOLDER = abspath(BACKUP_FOLDER)
+elif SAVE_BACKUPS_TO_VIDEO_FOLDER:   BACKUP_FOLDER = pjoin(VIDEO_FOLDER, BACKUP_FOLDER)
 elif SAVE_BACKUPS_TO_APPDATA_FOLDER: BACKUP_FOLDER = pjoin(APPDATA_FOLDER, BACKUP_FOLDER)
-else: BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
+else:                                BACKUP_FOLDER = pjoin(CWD, BACKUP_FOLDER)
 
 # `VIDEO_FOLDER` and `BACKUP_FOLDER` must be on the same drive or we'll get OSError 17
 # if they are, warn user -> explain how to fix it -> abort launch
@@ -1022,13 +1066,13 @@ if (splitdrive(VIDEO_FOLDER)[0] != splitdrive(BACKUP_FOLDER)[0]
     if NO_MENU: restore_menu_file()
 
     drive = splitdrive(VIDEO_FOLDER)[0]
-    msg = ("Your video folder and the path for saving temporary backups "
-           f"are on different drives. {TITLE} cannot backup and restore "
-           "videos across drives without copying them back and forth.\n\n"
-           f"Video folder: {VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}"
-           f"\n\nTo resolve this conflict, open \"{basename(CONFIG_PATH)}"
-           "\" and set `SAVE_BACKUPS_TO_VIDEO_FOLDER` to True or set "
-           f"`BACKUP_FOLDER` to an absolute path on the {drive} drive.")
+    msg = ('Your video folder and the path for saving temporary backups '
+           f'are on different drives. {TITLE} cannot backup and restore '
+           'videos across drives without copying them back and forth.\n\n'
+           f'Video folder: {VIDEO_FOLDER}\nBackup folder: {BACKUP_FOLDER}'
+           f'\n\nTo resolve this conflict, open "{basename(CONFIG_PATH)}" '
+           'and set `SAVE_BACKUPS_TO_VIDEO_FOLDER` to True or set '
+           f'`BACKUP_FOLDER` to an absolute path on the {drive} drive.')
     abort_launch(2, 'Invalid Backup Directory', msg, 0x00040030)  # !-symbol, stay on top
 
 # ensure `BACKUP_FOLDER` exists, but only once we've dealt with drive-conflict
@@ -1049,7 +1093,7 @@ class Icon(pystray._win32.Icon):
         just assuming a given .ICO is valid, and using the .exe's icon if it
         isn't). See original _win32.Icon class for original comments. '''
 
-    def _on_notify(self, wparam, lparam):
+    def _on_notify(self, wparam: int, lparam: int):
         ''' Adds auto-updating, middle-click, and menu alignment support. '''
         if lparam == WM_LBUTTONUP:
             self()
@@ -1088,26 +1132,29 @@ class Icon(pystray._win32.Icon):
 
         try:
             handle = win32.LoadImage(None, self._icon, *args)
-            if handle is None: raise
+            if handle is None:
+                raise
             self._icon_handle = handle
             return
         except:
-            if IS_COMPILED:             # if we're compiled, take the .exe's icon
+            if IS_COMPILED:                 # if we're compiled, take the .exe's icon
                 try:
                     # https://stackoverflow.com/questions/90775/how-do-you-load-an-embedded-icon-from-an-exe-file-with-pywin32
-                    import win32api     # these libraries cost almost nothing to import...
-                    import win32gui     # ...and don't add any files to our compilation
+                    import win32api         # these libraries cost almost nothing to import...
+                    import win32gui         # ...and don't add any files to our compilation
 
                     # NOTE: for our current icon, index 4 is the best icon, even at different scales
-                    RT_ICON = 3         # this is so we don't need `win32con.RT_ICON`
+                    RT_ICON = 3             # this is so we don't need `win32con.RT_ICON`
                     icon_index = 4
 
                     resource = win32api.LoadResource(None, RT_ICON, icon_index)
                     handle = win32gui.CreateIconFromResource(resource, True)
-                    if handle is None: raise
+                    if handle is None:
+                        raise
                     self._icon_handle = handle
                     return logging.warning(f'Custom icon at "{self._icon}" was invalid. Using .exe\'s icon.')
-                except: logging.warning(f'.exe\'s icon at index {icon_index} was not valid.')
+                except:
+                    logging.warning(f'.exe\'s icon at index {icon_index} was not valid.')
 
         # warn and exit. use f-string for warning in case `self._icon` isn't a string
         msg = f'The icon at `CUSTOM_ICON` is not a valid .ICO file: "{self._icon}"'
@@ -1122,7 +1169,7 @@ INSTANT_REPLAY_HOTKEY_SCANCODES = tuple(sorted(keyboard.key_to_scan_codes(key.st
 ALL_INSTANT_REPLAY_HOTKEY_SCANCODES = tuple(code for code_tuple in INSTANT_REPLAY_HOTKEY_SCANCODES for code in code_tuple)
 ACTUAL_INSTANT_REPLAY_HOTKEY = tuple(sorted(code_tuple[0] for code_tuple in INSTANT_REPLAY_HOTKEY_SCANCODES))
 KEYPAD_DUPLICATES = (71, 72, 73, 75, 77, 79, 80, 81, 82, 83)   # 7, 8, 9, 4, 6, 1, 2, 3, 0, 'decimal'
-def pre_process_event(self, event):
+def pre_process_event(self, event: keyboard.KeyboardEvent) -> int | bool:
     ''' This is an *extremely* convulted way of dealing with
         two major shortcomings with the keyboard library:
             A. Using hotkeys while other keys are held down (like ShadowPlay)
@@ -1154,7 +1201,8 @@ def pre_process_event(self, event):
         for valid_keys in INSTANT_REPLAY_HOTKEY_SCANCODES:      # each "key" is a tuple of possible scan codes that key uses
             if not any(key in hotkey for key in valid_keys):    # see if at least one scan code in each tuple is being pressed
                 break
-        else: hotkey = ACTUAL_INSTANT_REPLAY_HOTKEY             # nobreak -> set hotkey to something `keyboard` will recognize
+        else:                                                   # nobreak -> set hotkey to something `keyboard` will recognize
+            hotkey = ACTUAL_INSTANT_REPLAY_HOTKEY
 
     # B. Preventing erronous hotkey triggers when pressing buttons that share scancodes with the number pad (Alt + Arrows, etc.)
     #    I have spent many days trying to figure out a simple, general purpose solution better than this one. I don't think
@@ -1174,7 +1222,7 @@ def pre_process_event(self, event):
 
 
 TRIM_NUMBERS = []
-def wait_for_custom_trim_length(self, event):
+def wait_for_custom_trim_length(self, event: keyboard.KeyboardEvent) -> int | bool:
     ''' Alternative `pre_process_event` implementation designed for catching
         custom trim lengths being entered. Ignores hotkeys, and waits for a
         non-number to be pressed. Cancels on `Esc`. Accepts keypad numbers,
@@ -1209,10 +1257,12 @@ keyboard._KeyboardListener.pre_process_event = pre_process_event
 # Clip class
 # ---------------------
 class Clip:
-    __slots__ = ('working', 'path', 'name', 'game', 'time', 'raw_size', 'size', 'date', 'full_date', 'length', 'length_string', 'length_size_string')
-    def __repr__(self): return self.name
+    __slots__ = (
+        'working', 'path', 'name', 'game', 'time', 'raw_size', 'size',
+        'date', 'full_date', 'length', 'length_string', 'length_size_string'
+    )
 
-    def __init__(self, path, stat, rename=False):
+    def __init__(self, path: str, stat: os.stat_result, rename: bool = False):
         self.working = False
 
         path, self.name = auto_rename_clip(path) if rename else (abspath(path), basename(path))   # abspath for consistent formatting
@@ -1234,7 +1284,7 @@ class Clip:
         self.length_size_string = f'Length: {length_string} ({size})'
 
 
-    def refresh(self, path=None, stat=None):
+    def refresh(self, path: str = None, stat: os.stat_result = None):
         ''' Refreshes various statistics for the clip, including creation
             time, size, and length. Pass `path` and `stat` as minor
             optimizations if you already have direct access to them. '''
@@ -1253,12 +1303,16 @@ class Clip:
         self.length_size_string = f'Length: {length_string} ({size})'
 
 
-    def is_working(self, verb):
+    def is_working(self, verb: str) -> bool:
         if self.working:
             logging.info(f'Busy -- cannot {verb.lower()}. Clip {self.name} is being worked on.')
             play_alert('busy')
             return True
         return False
+
+
+    def __repr__(self) -> str:
+        return self.name
 
 
 # ---------------------
@@ -1275,7 +1329,8 @@ class AutoCutter:
         protected_paths = []
         for path in self.get_all_backups():
             path_dirname, path_basename = splitpath(path)
-            if '.' not in path_basename[20:]: continue                  # skip files with empty basenames
+            if '.' not in path_basename[20:]:                           # skip files with empty basenames
+                continue
             protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
             protected_paths.append(protected_path)
         logging.info(f'Current protected paths: {protected_paths}')
@@ -1285,7 +1340,9 @@ class AutoCutter:
         # if history file exists, import clips
         if exists(HISTORY_PATH):
             with open(HISTORY_PATH, 'r') as history:
-                # get all valid unique paths from history file, create a buffer of clip objects, then start caching paths as strings outside buffer
+
+                # get all valid unique paths from history file, create a buffer of...
+                # ...clip objects, then start caching paths as strings outside buffer
                 lines = []
                 addpath = lines.append
                 for path in reversed(history.read().splitlines()):      # reversed() is an iterable, not an actual list (no performance loss)
@@ -1301,12 +1358,13 @@ class AutoCutter:
                               else path
                               for index, path in enumerate(lines)]
                 last_clips.reverse()                                    # .reverse() is a very fast operation
-                if last_clips: logging.info(f'Previous {len(last_clips)} clip{"s" if len(last_clips) != 1 else ""} loaded: {last_clips}')
-                else: logging.info('No previous clips detected.')
-                logging.info(f'Previous clips loaded in {time.time() - start:.2f} seconds.')
+                if last_clips: logging.info(f'Previous {len(last_clips)} clip{"s" if len(last_clips) != 1 else ""} loaded from history: {last_clips}')
+                else: logging.info('No previous clips detected in history.')
+                logging.info(f'Previous clips loaded from history in {time.time() - start:.2f} seconds.')
 
                 self.last_clips = last_clips
-                if CHECK_FOR_NEW_CLIPS_ON_LAUNCH: self.check_for_clips(manual_update=True)
+                if CHECK_FOR_NEW_CLIPS_ON_LAUNCH:
+                    self.check_for_clips(manual_update=True)
                 del lines
 
         # no history file -- run first-time setup
@@ -1314,17 +1372,17 @@ class AutoCutter:
             self.last_clips = []
 
             # put together simple, dynamic message for message box
-            msg = ("It appears you do not have a history file. Would you "
-                   f"like to add all existing clips in {VIDEO_FOLDER}? ")
+            msg = ('It appears you do not have a history file. Would you '
+                   f'like to add all existing clips in {VIDEO_FOLDER}? ')
             if IGNORE_VIDEOS_IN_THESE_FOLDERS:
                 msg += '\n\nThe following subfolders will be ignored:\n\t"'
                 msg += '"\n\t"'.join(IGNORE_VIDEOS_IN_THESE_FOLDERS) + '"'
             else:
-                msg += ("Your `IGNORED_FOLDERS` setting is empty, so "
-                        "all subfolders will be scanned.")
-            msg += (f"\n\nAny clips matching ShadowPlay's naming format will "
-                    "be renamed to match your own `NAME_FORMAT` setting: "
-                    f"\n\t\"{RENAME_FORMAT}\"")
+                msg += ('Your `IGNORED_FOLDERS` setting is empty, so '
+                        'all subfolders will be scanned.')
+            msg += (f'\n\nAny clips matching ShadowPlay\'s naming format will '
+                    'be renamed to match your own `NAME_FORMAT` setting: '
+                    f'\n\t"{RENAME_FORMAT}"')
             msg += f'\n\nClick cancel to exit {TITLE}.'
 
             # ?-symbol, stay on top, Yes/No/Cancel
@@ -1351,34 +1409,44 @@ class AutoCutter:
             return (codes[0], *(code for code in codes[1:] if code not in KEYPAD_DUPLICATES))
         keyboard.key_to_scan_codes = key_to_scan_codes_no_keypad
 
-        keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
-        keyboard.add_hotkey(MERGE_TRACKS_HOTKEY, self.merge_clip_audio_tracks)
-        keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
-        keyboard.add_hotkey(UNDO_HOTKEY, self.undo)
+        if CONCATENATE_HOTKEY:  keyboard.add_hotkey(CONCATENATE_HOTKEY, self.concatenate_last_clips)
+        if MERGE_TRACKS_HOTKEY: keyboard.add_hotkey(MERGE_TRACKS_HOTKEY, self.merge_clip_audio_tracks)
+        if DELETE_HOTKEY:       keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
+        if UNDO_HOTKEY:         keyboard.add_hotkey(UNDO_HOTKEY, self.undo)
         for key, length in LENGTH_DICTIONARY.items():
             keyboard.add_hotkey(key, self.trim_clip, args=(length,))
         logging.info(f'Auto-cutter initialized in {time.time() - start:.2f} seconds.')
 
     # ---------------------
-    # Helper methods
+    # Clip helper methods
     # ---------------------
-    def wait(self, verb=None, alert=None, min_clips=1):
+    def wait(self, verb: str = None, alert: str = None, min_clips: int = 1) -> bool:
         ''' Checks if a clip is queued up in another thread and waits for it.
             Returns `False` If `self.last_clips` is smaller than `min_clips`.
             Plays sound effect specified by `alert`. Describes action in log
             message with `verb` if specified, otherwise `alert` is used. '''
-        log_verb = verb if verb else alert
-        if alert is not None: play_alert(sound=alert, default=verb)
+        if alert is not None:
+            play_alert(sound=alert, default=verb)
         if self.waiting_for_clip:
-            logging.info(f'{log_verb} detected, waiting for instant replay to finish saving...')
-            while self.waiting_for_clip: time.sleep(0.2)
+            logging.info(f'{verb or alert} detected, waiting for instant replay to finish saving...')
+            while self.waiting_for_clip:
+                time.sleep(0.2)
         if len(self.last_clips) < min_clips:
-            logging.warning(f'(!) Cannot {log_verb.lower()}: Not enough clips have been created since the auto-cutter was started')
+            logging.warning(f'(!) Cannot {(verb or alert).lower()}: Not enough clips have been created since the auto-cutter was started')
             return False
         return True
 
 
-    def get_clip(self, index=None, path=None, verb=None, alert=None, min_clips=1, patient=True, _recursive=False):
+    def get_clip(
+        self,
+        index: int = None,
+        path: str = None,
+        verb: str = None,
+        alert: str = None,
+        min_clips: int = 1,
+        patient: bool = True,
+        _recursive: bool = False
+    ) -> Clip | str | None:
         ''' Safely gets a clip at a specified `index` or `path`. Recursively
             calls itself until a valid clip is obtained if `patient` is True,
             otherwise raises an error if desired clip cannot be obtained.
@@ -1387,10 +1455,13 @@ class AutoCutter:
             to exist if `patient` is True. '''
         if not _recursive:
             logging.info(f'Getting clip at index {index} (verb={verb} alert={alert} min_clips={min_clips} patient={patient})')
-            if alert is not None: play_alert(sound=alert, default=verb)
-            if patient and not self.wait(verb=verb if verb else alert, min_clips=min_clips): return
+            if alert is not None:
+                play_alert(sound=alert, default=verb)
+            if patient and not self.wait(verb=verb or alert, min_clips=min_clips):
+                return
 
-        if index is not None: clip = self.last_clips[index]
+        if index is not None:
+            clip = self.last_clips[index]
         elif path is not None:
             path = abspath(path)
             for last_clip_index, last_clip in enumerate(self.last_clips):
@@ -1401,16 +1472,19 @@ class AutoCutter:
                         break
                 elif last_clip == path:
                     return path     # `path` in last_clips but as cached string -> return path immediately
-            else: return None       # `path` specified but not present in last_clips -> return None
+            else:                   # `path` specified but not present in last_clips -> return None
+                return None
 
         if not exists(clip.path):
             self.pop(index)
-            if patient: return self.get_clip(index, path, verb, alert, min_clips, patient, _recursive=True)
+            if patient:
+                return self.get_clip(index, path, verb, alert, min_clips, patient, _recursive=True)
             else:
                 logging.warning(f'Clip at index {index} does not actually exist: {clip.path}')
                 play_alert('error')
-                raise AssertionError("Clip does not exist")
-        if clip.is_working(verb if verb else alert): raise AssertionError("Clip is being worked on")
+                raise AssertionError('Clip does not exist')
+        if clip.is_working(verb or alert):
+            raise AssertionError('Clip is being worked on')
         return clip
 
 
@@ -1426,11 +1500,13 @@ class AutoCutter:
                     last_clips[cache_index] = clip.path
                     break
                 last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
-        except IndexError: pass                 # IndexError -> pop was out of range, pass
-        except: logging.error(f'(!) Error while caching clip at index {cache_index} <len(last_clips)={len(last_clips)}>: {format_exc()}')
+        except IndexError:                      # IndexError -> pop was out of range, pass
+            pass
+        except:
+            logging.error(f'(!) Error while caching clip at index {cache_index} <len(last_clips)={len(last_clips)}>: {format_exc()}')
 
 
-    def insert_clip(self, path, index=None, return_index=True):
+    def insert_clip(self, path: str, index: int = None, return_index: bool = True) -> Clip | str | int:
         ''' Inserts `path` within `self.last_clips` based on its creation date
             (unless `index` is specified). Meant for retroactively adding old
             clips, not appending new ones. Returns the clip's index if
@@ -1450,32 +1526,35 @@ class AutoCutter:
             path = Clip(path, stat, rename=False)
             self.last_clips.insert(index, path)
             self.cache_clip()
-        else: self.last_clips.insert(index, path)
+        else:
+            self.last_clips.insert(index, path)
 
         return index if return_index else path
 
 
-    def update_clip(self, path, return_index=False):
+    def update_clip(self, path: str, return_index: bool = False) -> Clip | str | int:
         ''' Refreshes a clip at `path`. If no clip object/string exists
             for `path`, one is inserted using `self.insert_clip`. Returns
             the clip's index if `return_index` is True, else the clip
             object/string itself. `path` is assumed to exist. '''
         logging.info(f'Updating clip for path "{path}".')
-        try:                # self.get_clip() is not needed here
+        try:                                    # `self.get_clip()` is not needed here
             index = self.index(path)
             clip = self.last_clips[index]
-            if isinstance(clip, Clip): clip.refresh(path)
+            if isinstance(clip, Clip):
+                clip.refresh(path)
             return index if return_index else clip
-        except ValueError:  # insert clip if self.index() raised a ValueError
+        except ValueError:                      # insert clip if self.index() raised a ValueError
             return self.insert_clip(path, return_index=return_index)
 
 
-    def pop(self, index=-1):
-        ''' Wrapper for popping from the last_clips list that converts cached paths from strings to
-            Clip objects, if necessary, with a failsafe for non-existent cached paths included.
-            Attempts to return popped value on error, if possible -- otherwise returns None. '''
+    def pop(self, index: int = -1) -> Clip | str | None:
+        ''' Pop and return the `Clip` or string at `index` in `self.last_clips`.
+            Converts cached string to Clip object, if necessary (and possible).
+            Returns None if unsuccessful. '''
         last_clips = self.last_clips
         popped = None
+
         try:
             popped = last_clips.pop(index)
 
@@ -1488,34 +1567,40 @@ class AutoCutter:
                     last_clips[cache_index] = Clip(clip, getstat(clip), rename=False)
                     break
                 last_clips.pop(cache_index)     # if cached clip doesn't exist, pop and try next clip
+        except IndexError:                      # IndexError -> pop was out of range, pass and return None
+            pass
+        except:
+            logging.error(f'(!) Error while popping clip at index {index} <cache_index={cache_index}, len(last_clips)={len(last_clips)}>: {format_exc()}')
 
-        except IndexError: pass                 # IndexError -> pop was out of range, pass and return None
-        except: logging.error(f'(!) Error while popping clip at index {index} <cache_index={cache_index}, len(last_clips)={len(last_clips)}>: {format_exc()}')
         return popped
 
 
-    def index(self, path):
+    def index(self, path: str) -> int:
         ''' Returns the index of a given `path` in `self.last_clips`. '''
         path = abspath(path)
         for index, clip in enumerate(self.last_clips):
             if isinstance(clip, Clip):
-                if clip.path == path: return index
-            elif clip == path: return index
+                if clip.path == path:
+                    return index
+            elif clip == path:
+                return index
         raise ValueError(f'{path} not in last_clips')
 
 
-    def index_for_time(self, time):
+    def index_for_time(self, time: float) -> int:
         ''' Returns the index in `self.last_clips` that `time`
             would occupy if a clip created at that time existed. '''
         # starts with most recent clips to check `Clip` objects first
         for index, clip in enumerate(reversed(self.last_clips)):
             if isinstance(clip, Clip):
-                if clip.time <= time: return len(self.last_clips) - index
-            elif getstat(clip).st_ctime <= time: return len(self.last_clips) - index
+                if clip.time <= time:
+                    return len(self.last_clips) - index
+            elif getstat(clip).st_ctime <= time:
+                return len(self.last_clips) - index
         return 0
 
 
-    def get_all_backups(self):
+    def get_all_backups(self) -> list[str]:
         ''' Returns all backups in `BACKUP_FOLDER` as a flattened list.
             Assumes all backups start with `time.time_ns()`. '''
         all_backups = []
@@ -1525,11 +1610,12 @@ class AutoCutter:
                 files = listdir(subfolder)
                 if files: all_backups.extend(pjoin(subfolder, file) for file in files if file[:19].isnumeric())
                 else: os.rmdir(subfolder)
-            except: pass
+            except:
+                pass
         return all_backups
 
 
-    def refresh_backups(self, *protected_paths):
+    def refresh_backups(self, *protected_paths: str):
         ''' Deletes outdated backup files and empty backup folders. Ignores
             `protected_paths` while counting, even if `MAX_BACKUPS` is 0.
             Outdated files are removed from `self.protected_paths`.
@@ -1547,7 +1633,8 @@ class AutoCutter:
                         protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
                         try: self.protected_paths.remove(protected_path)
                         except ValueError: pass
-                    except: logging.warning(f'Failed to delete outdated backup "{path}": {format_exc()}')
+                    except:
+                        logging.warning(f'Failed to delete outdated backup "{path}": {format_exc()}')
 
         # add new protected paths
         for path in protected_paths:
@@ -1557,14 +1644,9 @@ class AutoCutter:
             self.protected_paths.append(protected_path)
 
     # ---------------------
-    # Acquiring clips
+    # Scanning for clips
     # ---------------------
-    def check_for_clips(self, manual_update=False, from_time=None):
-        self.waiting_for_clip = True
-        Thread(target=self.check_for_clips_thread, args=(manual_update, from_time), daemon=True).start()
-
-
-    def check_for_clips_thread(self, manual_update=False, from_time=None):
+    def check_for_clips(self, manual_update: bool = False, from_time: float = None):
         ''' Scans `VIDEO_FOLDER` for new .mp4 files to add as clips to
             `self.last_clips`. Runs automatically after every instant-replay.
             Only checks the base-level files inside `VIDEO_FOLDER`'s
@@ -1594,17 +1676,27 @@ class AutoCutter:
             clips is a good thing or not. The limited scanning range mentioned
             above is a good middle-ground for now:
             https://github.com/rebane2001/NvidiaInstantRename/blob/mane/InstantRenameCLI.py '''
+        self.waiting_for_clip = True
+        Thread(target=self.check_for_clips_thread, args=(manual_update, from_time), daemon=True).start()
+
+
+    def check_for_clips_thread(self, manual_update: bool = False, from_time: float = None):
+        ''' See `self.check_for_clips()` for details. '''
         try:
+            added = 0
+            old_memory = get_memory()
+            last_clips = self.last_clips
 
             # determine the timestamp that all new videos should be after
-            last_clips = self.last_clips
             if not manual_update:   # auto-update -> wait for instant replay to finish saving
                 logging.info('Instant replay detected! Waiting 3 seconds...')
                 last_clip_time = time.time() - 1
                 time.sleep(3)
-            elif from_time is not None: last_clip_time = from_time
+            elif from_time is not None:
+                last_clip_time = from_time
             else:                   # if no clips in last_clips -> use history file's creation date
-                try: last_clip_time = last_clips[-1].time
+                try:
+                    last_clip_time = last_clips[-1].time
                 except IndexError:  # if no history file -> use script's start time
                     try: last_clip_time = getstat(HISTORY_PATH).st_ctime
                     except: last_clip_time = SCRIPT_START_TIME
@@ -1614,22 +1706,22 @@ class AutoCutter:
             for filename in listdir(VIDEO_FOLDER):
                 if filename in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
                 folder = pjoin(VIDEO_FOLDER, filename)
-                if folder == BACKUP_FOLDER: continue    # user might use absolute path for backup folder
+                if folder == BACKUP_FOLDER: continue        # user might use absolute path for backup folder
 
                 if isdir(folder):
                     for file in listdir(folder):
                         path = pjoin(folder, file)
-                        stat = getstat(path)            # skip non-mp4 files ↓
+                        stat = getstat(path)                # skip non-mp4 files ↓
                         if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
                             logging.info(f'New video detected: {file}')
                             while get_video_duration(path) == 0:
                                 logging.info('Video duration is still 0, retrying...')
-                                time.sleep(0.2)         # if duration is 0, the video is still being saved
+                                time.sleep(0.2)             # if duration is 0, the video is still being saved
 
                             clip = Clip(path, stat, rename=RENAME)
                             last_clips.append(clip)
-                            logging.info(f'Memory usage after adding clip: {get_memory():.2f}mb\n')
-                            if manual_update: continue  # don't stop after first video on manual scans
+                            added += 1
+                            if manual_update: continue      # don't stop after first video on manual scans
                             else: return self.cache_clip()
 
         except:
@@ -1637,7 +1729,11 @@ class AutoCutter:
             play_alert('error')
 
         finally:
-            if manual_update:       # sort last_clips and then verify the cache
+            new_memory = get_memory()
+            logging.info(f'Memory usage after adding {added} clips: {new_memory:.2f}mb (+{new_memory - old_memory:.2f}mb)\n')
+
+            # sort `last_clips` and then verify the cache
+            if manual_update:
                 last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
                 for index, clip in enumerate(reversed(last_clips)):
                     if isinstance(clip, Clip) and index >= CLIP_BUFFER:
@@ -1645,34 +1741,91 @@ class AutoCutter:
                     elif isinstance(clip, str) and index < CLIP_BUFFER:
                         last_clips[-index - 1] = Clip(path, stat, rename=RENAME)
                 logging.info('Manual scan complete.')
+
             self.waiting_for_clip = False
             gc.collect(generation=2)
 
     # ---------------------
     # Clip actions
     # ---------------------
-    def _trim_clip(self, clip: Clip, length: int):
-        ''' Trims `clip` down to the last `length` seconds. Clip is edited
-            in-place, and the original is moved to `BACKUP_FOLDER`. '''
+    @index_safe('while opening last clip')
+    def open_clip(self, index: int = -1, play: bool = TRAY_CLIPS_PLAY_ON_CLICK, patient: bool = True) -> str | None:
+        ''' Opens a recent clip by its index. If play is True, this function
+            plays the video directly. Otherwise, it's opened in explorer. '''
+        clip_path = self.get_clip(index, verb='Open', patient=patient).path
+        os.startfile(clip_path) if play else subprocess.Popen(f'explorer /select,"{clip_path}"', shell=True)
+        return clip_path
+
+
+    @index_safe('while deleting last clip')
+    def delete_clip(self, index: int = -1, patient: bool = True):
+        ''' Deletes a clip at the given `index`. '''
+        if patient and not self.wait(alert='Delete'): return    # not a part of get_clip(), to simplify things
+        logging.info(f'Deleting clip at index {index}: {self.last_clips[index].path}')
+        delete(self.pop(index).path)                            # pop and remove directly
+        logging.info('Deletion successful.\n')
+
+
+    def undo(self, *, patient: bool = True):                    # * used to capture pystray's unused args
+        ''' Undoes an action described in `UNDO_LIST_PATH`. Each line
+            represents one action that can be undone, and consists of
+            multiple strings required for the undo, separated by "-->". '''
         try:
-            clip_length = clip.length
-            if clip_length <= length:
-                return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
-            if length <= 0:
-                return logging.info('(?) Trim length must be greater than 0 seconds.')
-            logging.info(f'Trimming clip {clip.name} from {clip_length:.2f} to {length} seconds...')
+            with open(UNDO_LIST_PATH, 'r') as undo:
+                line = undo.readline().strip().split(' -> ')
 
-            with edit(clip, undo_action=f'Trimmed to {length:g} seconds') as temp_path:
-                ffmpeg(temp_path, f'-ss {clip_length - length} -c:v copy -c:a copy', clip.path)
-            logging.info(f'Trim to {length} seconds successful.\n')
+                # trimming/track merging
+                # - old -> unedited video's backup name
+                # - new -> new, edited video's full path
+                if len(line) == 3:
+                    old, new, action = line
 
-        except (IndexError, AssertionError): return
+                    action_lower = action.lower()
+                    if 'trim' in action_lower:    alert = 'Undoing Trim'
+                    elif 'merge' in action_lower: alert = 'Undoing Track Merge'
+                    else:                         alert = 'Undo'
+                    if patient and not self.wait(verb=f'Undo "{action}"', alert=alert):
+                        return
+
+                    if exists(new):                             # delete edited video (if it still exists)
+                        remove(new)
+                    renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
+
+                    self.update_clip(path=new)                  # verify and refresh `new`'s clip
+                    logging.info(f'Undo completed for "{action}" on clip "{new}"')
+
+                # concatenation
+                # - old, old2 -> unedited videos' backup names
+                # - new       -> new, edited video's full path
+                # - new2      -> the video that was deleted when the original concat happened
+                elif len(line) == 5:
+                    old, old2, new, new2, action = line
+
+                    alert = 'Undoing Concatenation' if 'concat' in action.lower() else 'Undo'
+                    if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
+
+                    if exists(new):                             # delete edited video (if it still exists)
+                        remove(new)
+                    if exists(new2):                            # `new2` has been replaced? (this should NOT happen)
+                        logging.warn('(!) Clip shares name with concatenated clip that should have been protected: ' + new2)
+                        base, ext = splitext(new2)
+                        new2 = f'{base} (pre-concat){ext}'      # add " (pre-concat)" marker to `new2`
+                    renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
+                    rename(pjoin(BACKUP_FOLDER, old2), new2)
+
+                    # verify/refresh `new` and re-add `new2` (concat removes `new2` from the list)
+                    index = self.update_clip(path=new, return_index=True)
+                    self.insert_clip(new2, index=index + 1)
+                    logging.info(f'Undo completed for "{action}" on clips "{new}" and "{new2}"')
+
+            remove(UNDO_LIST_PATH)
         except:
-            logging.error(f'(!) Error BEFORE trimming clip: {format_exc()}')
+            logging.error(f'(!) Error while undoing last action: {format_exc()}')
             play_alert('error')
 
 
-    def trim_clip(self, length, index=-1, patient=True):
+    @index_safe('while trimming clip')
+    def trim_clip(self, length: int | str, index: int = -1, patient: bool = True):
         ''' Trims a clip at `index` down to the last `length` seconds. If
             `length` is the string "custom", a custom-length trim is started
             in a separate thread. '''
@@ -1705,109 +1858,85 @@ class AutoCutter:
         if TRIM_NUMBERS:
             length = int(''.join(TRIM_NUMBERS))
             if length <= 0: play_alert(sound='trim cancelled')
-            else: play_alert(sound=length, default='trim')
+            else:           play_alert(sound=length, default='trim')
             self._trim_clip(clip, length)
         else:
             logging.info('Custom-length trim cancelled.')
             play_alert(sound='trim cancelled')
 
 
-    def concatenate_last_clips(self, index=-1, patient=True):
+    @index_safe('BEFORE trimming clip')
+    def _trim_clip(self, clip: Clip, length: int):
+        ''' Trims `clip` down to the last `length` seconds. Clip is edited
+            in-place, and the original is moved to `BACKUP_FOLDER`. '''
+        clip_length = clip.length
+        if clip_length <= length:
+            return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
+        if length <= 0:
+            return logging.info('(?) Trim length must be greater than 0 seconds.')
+        logging.info(f'Trimming clip {clip.name} from {clip_length:.2f} to {length} seconds...')
+
+        with edit(clip, undo_action=f'Trimmed to {length:g} seconds') as temp_path:
+            ffmpeg(temp_path, f'-ss {clip_length - length} -c:v copy -c:a copy', clip.path)
+        logging.info(f'Trim to {length} seconds successful.\n')
+
+
+    @index_safe('while concatenating last two clips')
+    def concatenate_last_clips(self, index: int = -1, patient: bool = True):
         ''' 1. Get clip at `index` and the clip just before it.
             2. Move clips to backup folder.
             3. Write backup paths to a text file for FFmpeg to use.
             4. Concat files to second (earlier) clip's path.
             5. Delete text file and refresh remaining clip. '''
-        try:
-            clip1 = self.get_clip(index=index - 1, alert='Concatenate', min_clips=1, patient=patient)
-            clip2 = self.get_clip(index=index, min_clips=2, patient=patient)
-            clip1_path = clip1.path
-            logging.info(f'Concatenating clips "{clip1_path}" and "{clip2.path}"')
+        clip1 = self.get_clip(index=index - 1, alert='Concatenate', min_clips=1, patient=patient)
+        clip2 = self.get_clip(index=index, min_clips=2, patient=patient)
+        clip1_path = clip1.path
+        logging.info(f'Concatenating clips "{clip1_path}" and "{clip2.path}"')
 
-            with edit(clip1, clip2, undo_action='Concatenated') as temp_paths:
-                # write list of clips to text file (/ as separator and single quotes to avoid ffmpeg errors)
-                text_path = pjoin(CWD, f'{time.time_ns()}.concatlist.txt')
-                with open(text_path, 'w') as txt:
-                    lines = '\nfile \''.join(temp_paths).replace(sep, '/')
-                    txt.write(f"file '{lines}'")
+        with edit(clip1, clip2, undo_action='Concatenated') as temp_paths:
+            # write list of clips to text file (/ as separator and single quotes to avoid ffmpeg errors)
+            text_path = pjoin(CWD, f'{time.time_ns()}.concatlist.txt')
+            with open(text_path, 'w') as txt:
+                lines = '\nfile \''.join(temp_paths).replace(sep, '/')
+                txt.write(f'file \'{lines}\'')
 
-                ffmpeg('', f'-f concat -safe 0 -i "{text_path}" -c copy', clip1_path)
-                delete(text_path)
-            logging.info('Clips concatenated, renamed, refreshed, and cleaned up successfully.')
-
-        except AssertionError: return
-        except:
-            logging.error(f'(!) Error while concatenating last two clips: {format_exc()}')
-            play_alert('error')
+            ffmpeg('', f'-f concat -safe 0 -i "{text_path}" -c copy', clip1_path)
+            delete(text_path)
+        logging.info('Clips concatenated, renamed, refreshed, and cleaned up successfully.')
 
 
-    def merge_clip_audio_tracks(self, index=-1, patient=True):
+    @index_safe('BEFORE merging audio tracks')
+    def merge_clip_audio_tracks(self, index: int = -1, patient: bool = True):
         ''' Merges the audio tracks of a clip at `index` for clips that
             split the system and microphone audio intro two tracks.
             https://stackoverflow.com/questions/54060729/ffmpeg-how-to-merge-all-audio-streams-into-stereo '''
-        try:
-            clip = self.get_clip(index, alert='Merge', min_clips=1, patient=patient)
-            clip_path = clip.path
-            track_count = get_audio_tracks(clip_path)
-            if track_count <= 1:
-                if track_count == 1:
-                    return logging.info('(?) Video only has 1 audio track.')
-                return logging.info('(?) Video has no audio tracks.')
-            logging.info(f'Merging audio tracks for clip {clip.name}...')
+        clip = self.get_clip(index, alert='Merge', min_clips=1, patient=patient)
+        clip_path = clip.path
+        track_count = get_audio_tracks(clip_path)
+        if track_count <= 1:                                # return log message for <2 audio tracks
+            msg = ('only has 1', '') if track_count else ('has no', 's')
+            return logging.info(f'(?) Video {msg[0]} audio track{msg[1]}.')
+        logging.info(f'Merging audio tracks for clip {clip.name}...')
 
-            with edit(clip, undo_action='Merged tracks') as temp_path:
-                ffmpeg(temp_path, f'-filter_complex "[0:a]amerge=inputs={track_count}[a]" -ac 2 -map 0:v -map "[a]" -c:v copy', clip_path)
-            logging.info('Audio track merging successful.\n')
-
-        except:
-            logging.error(f'(!) Error BEFORE merging audio tracks: {format_exc()}')
-            play_alert('error')
-
-
-    def delete_clip(self, index=-1, patient=True):
-        ''' Deletes a clip at the given `index`. '''
-        if patient and not self.wait(alert='Delete'): return    # not a part of get_clip(), to simplify things
-        try:
-            logging.info(f'Deleting clip at index {index}: {self.last_clips[index].path}')
-            delete(self.pop(index).path)                        # pop and remove directly
-            logging.info('Deletion successful.\n')
-
-        except IndexError: return
-        except:
-            logging.error(f'(!) Error while deleting last clip: {format_exc()}')
-            play_alert('error')
-
-
-    def open_clip(self, index=-1, play=TRAY_CLIPS_PLAY_ON_CLICK, patient=True):
-        ''' Opens a recent clip by its index. If play is True, this function
-            plays the video directly. Otherwise, it's opened in explorer. '''
-        try:
-            clip_path = self.get_clip(index, verb='Open', patient=patient).path
-            os.startfile(clip_path) if play else subprocess.Popen(f'explorer /select,"{clip_path}"', shell=True)
-            return clip_path
-
-        except (IndexError, AssertionError): return
-        except:
-            logging.error(f'(!) Error while cutting last clip: {format_exc()}')
-            play_alert('error')
+        with edit(clip, undo_action='Merged tracks') as temp_path:
+            ffmpeg(temp_path, f'-filter_complex "[0:a]amerge=inputs={track_count}[a]" -ac 2 -map 0:v -map "[a]" -c:v copy', clip_path, copy_track_titles=False)
+        logging.info('Audio track merging successful.\n')
 
 
     # TODO unused and not fully implemented. should not happen automatically.
     # TODO also, these two methods are the only usage of `Clip.working`.
-    def compress_clip(self, index=-1, patient=True):
-        try:    # rename clip to include (comressing...), compress, then rename back and refresh
-            clip = self.get_clip(index, verb='Compress', patient=patient)
-            clip.working = True
-            try: Thread(target=self.compress_clip_thread, args=(clip,), daemon=True).start()
-            except:
-                logging.error(f'(!) Error while creating compression thread: {format_exc()}')
-                play_alert('error')
-            finally: clip.working = False
-
-        except (IndexError, AssertionError): pass
+    @index_safe('while compressing last clip')
+    def compress_clip(self, index: int = -1, patient: bool = True):
+        # rename clip to include (compressing...), compress, then rename back and refresh
+        clip = self.get_clip(index, verb='Compress', patient=patient)
+        clip.working = True
+        try:
+            Thread(target=self.compress_clip_thread, args=(clip,), daemon=True).start()
         except:
-            logging.error(f'(!) Error while cutting last clip: {format_exc()}')
+            logging.error(f'(!) Error while creating compression thread: {format_exc()}')
             play_alert('error')
+        finally:
+            clip.working = False
 
 
     def compress_clip_thread(self, clip: Clip):
@@ -1831,61 +1960,6 @@ class AutoCutter:
             clip.working = False
 
 
-    def undo(self, *args, patient=True):    # NOTE: *args used to capture pystray's unused args
-        ''' Undoes an action described in `UNDO_LIST_PATH`. Each line
-            represents one action that can be undone, and consists of
-            multiple strings required for the undo, separated by "-->". '''
-        try:
-            with open(UNDO_LIST_PATH, 'r') as undo:
-                line = undo.readline().strip().split(' -> ')
-
-                # trimming/track merging
-                # - old -> unedited video's backup name
-                # - new -> new, edited video's full path
-                if len(line) == 3:
-                    old, new, action = line
-
-                    action_lower = action.lower()
-                    if 'trim' in action_lower: alert = 'Undoing Trim'
-                    elif 'merge' in action_lower: alert = 'Undoing Track Merge'
-                    else: alert = 'Undo'
-                    if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
-
-                    if exists(new): remove(new)                 # delete edited video (if it still exists)
-                    renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
-
-                    self.update_clip(path=new)                  # verify and refresh `new`'s clip
-                    logging.info(f'Undo completed for "{action}" on clip "{new}"')
-
-                # concatenation
-                # - old, old2 -> unedited videos' backup names
-                # - new       -> new, edited video's full path
-                # - new2      -> the video that was deleted when the original concat happened
-                elif len(line) == 5:
-                    old, old2, new, new2, action = line
-
-                    alert = 'Undoing Concatenation' if 'concat' in action.lower() else 'Undo'
-                    if patient and not self.wait(verb=f'Undo "{action}"', alert=alert): return
-
-                    if exists(new): remove(new)                 # delete edited video (if it still exists)
-                    if exists(new2):                            # `new2` has been replaced? (this should NOT happen)
-                        logging.warn('(!) Clip shares name with concatenated clip that should have been protected: ' + new2)
-                        base, ext = splitext(new2)
-                        new2 = f'{base} (pre-concat){ext}'      # add " (pre-concat)" marker to `new2`
-                    renames(pjoin(BACKUP_FOLDER, old), new)     # super-rename in case folder was deleted
-                    rename(pjoin(BACKUP_FOLDER, old2), new2)
-
-                    # verify/refresh `new` and re-add `new2` (concat removes `new2` from the list)
-                    index = self.update_clip(path=new, return_index=True)
-                    self.insert_clip(new2, index=index + 1)
-                    logging.info(f'Undo completed for "{action}" on clips "{new}" and "{new2}"')
-
-            remove(UNDO_LIST_PATH)
-        except:
-            logging.error(f'(!) Error while undoing last action: {format_exc()}')
-            play_alert('error')
-
-
 ###########################################################
 if __name__ == '__main__':
     try:
@@ -1899,12 +1973,13 @@ if __name__ == '__main__':
         cutter = AutoCutter()
         logging.info(f'Memory usage after initializing AutoCutter class: {get_memory():.2f}mb')
 
-        if SEND_DELETED_FILES_TO_RECYCLE_BIN: import send2trash
+        if SEND_DELETED_FILES_TO_RECYCLE_BIN:
+            import send2trash
 
         # ---------------------
         # Tray-icon functions
         # ---------------------
-        def quit_tray(icon: pystray.Icon) -> None:
+        def quit_tray(icon: pystray.Icon):
             ''' Quits pystray `icon`, saves history, checks for external
                 config modification, does final cleanup, and exits script. '''
 
@@ -1928,7 +2003,8 @@ if __name__ == '__main__':
                     if new_hash != CONFIG_HASH:
                         logging.info('Config file will not be overwritten.')
                         atexit.unregister(cfg.write)
-            except: logging.info('(?) Harmless error while quitting tray: ' + format_exc())
+            except:
+                logging.info('(?) Harmless error while quitting tray: ' + format_exc())
 
             # unregister quit_tray so we don't run it twice
             try: atexit.unregister(quit_tray)
@@ -1948,7 +2024,8 @@ if __name__ == '__main__':
                 path = clip.path
                 try:        # assume all paths exist and react accordingly
                     stat = getstat(path)
-                    if stat.st_size != clip.raw_size: clip.refresh(path, stat)
+                    if stat.st_size != clip.raw_size:
+                        clip.refresh(path, stat)
                 except FileNotFoundError:
                     cutter.pop(index)
                     return get_clip_tray_title(index)
@@ -1963,13 +2040,13 @@ if __name__ == '__main__':
                         if d:   time_delta_string = f'{d}d'
                         elif h: time_delta_string = f'{h}h'
                         elif m: time_delta_string = f'{m}m'
-                        else: time_delta_string = '0m'
+                        else:   time_delta_string = '0m'
                     else:
                         if d:   time_delta_string = f'{d} day{ "s" if d > 1 else ""} ago'
                         elif h: time_delta_string = f'{h} hour{"s" if h > 1 else ""} ago'
                         elif m: time_delta_string = f'{m} min{ "s" if m > 1 else ""} ago'
-                        else: time_delta_string = 'just now'
-                else: time_delta_string = ''
+                        else:   time_delta_string = 'just now'
+                else:           time_delta_string = ''
 
                 return (TRAY_RECENT_CLIP_NAME_FORMAT
                         .replace('?date', clip.date)
@@ -1996,7 +2073,8 @@ if __name__ == '__main__':
                         pystray.MenuItem(lambda _: last_clips[index].length_size_string if len(last_clips) >= -index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False),
                         pystray.MenuItem(lambda _: last_clips[index].full_date if len(last_clips) >= -index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False)
                     )
-                else: extra_info_items = tuple()
+                else:
+                    extra_info_items = tuple()
 
                 # workaround for python bug/oddity involving creating lambdas in iterables
                 get_trim_action = lambda length, index: lambda: cutter.trim_clip(length, index, patient=False)
@@ -2059,7 +2137,7 @@ if __name__ == '__main__':
         # setting special-click actions
         LEFT_CLICK_ACTION = TRAY_ACTIONS.get(TRAY_LEFT_CLICK_ACTION)
         MIDDLE_CLICK_ACTION = TRAY_ACTIONS.get(TRAY_MIDDLE_CLICK_ACTION)
-        if LEFT_CLICK_ACTION is None: logging.warning(f'(X) Left click action "{TRAY_LEFT_CLICK_ACTION}" does not exist')
+        if LEFT_CLICK_ACTION is None:   logging.warning(f'(X) Left click action "{TRAY_LEFT_CLICK_ACTION}" does not exist')
         if MIDDLE_CLICK_ACTION is None: logging.warning(f'(X) Middle click action "{TRAY_MIDDLE_CLICK_ACTION}" does not exist')
 
         # setting the left-click action in pystray has an unusual implementation
@@ -2068,7 +2146,9 @@ if __name__ == '__main__':
         # creating menu -- advanced mode
         if TRAY_ADVANCED_MODE:
             exit_item_exists = False                # variable for making sure an exit item is included
-            def evaluate_menu(item_pairs, menu):    # function for recursively solving menus/submenus and exporting them to a list
+            def evaluate_menu(item_pairs: list[tuple(str, str)], menu: list[pystray.MenuItem]):
+                ''' Recursively solves menus/submenus using a list of
+                    name/action `item_pairs` and exports them to `menu`. '''
                 global exit_item_exists
                 for name, action in item_pairs:
                     try:
@@ -2089,9 +2169,10 @@ if __name__ == '__main__':
                             else:
                                 menu.append(pystray.MenuItem(lambda _: f'Memory usage: {get_memory():.2f}mb', None, enabled=False))
                             continue
+                        elif action == 'quit':      # add action normally, but confirm that an exit item is in the menu
+                            exit_item_exists = True
 
                         # normal actions -> create and append menu item
-                        elif action == 'quit': exit_item_exists = True  # confirm that an exit item is in the menu
                         menu.append(pystray.MenuItem(name, action=TRAY_ACTIONS[action]))
 
                     # AttributeError means item is (probably) a submenu
@@ -2100,22 +2181,26 @@ if __name__ == '__main__':
                             submenu = []
                             evaluate_menu(action, submenu)
                             menu.append(pystray.MenuItem(name, pystray.Menu(*submenu)))
-                    except KeyError: logging.warning(f'(X) The following menu item does not exist: "{name}": "{action}"')
+                    except KeyError:
+                        logging.warning(f'(X) The following menu item does not exist: "{name}": "{action}"')
 
             tray_menu = [LEFT_CLICK_ACTION] if LEFT_CLICK_ACTION else []    # start with left-click action included, if present
             evaluate_menu(load_menu(), tray_menu)                           # recursively evaluate custom menu
-            if not exit_item_exists: tray_menu.append(pystray.MenuItem('Exit', quit_tray))  # add exit item if needed
+            if not exit_item_exists:                                        # add exit item if needed
+                tray_menu.append(pystray.MenuItem('Exit', quit_tray))
 
         # creating menu -- "basic" mode
         else:   # create the base quick-actions menu
-            if not TRAY_SHOW_QUICK_ACTIONS: QUICK_ACTIONS_BASE = tuple()
-            else: QUICK_ACTIONS_BASE = (
-                pystray.MenuItem('Play most recent clip', lambda: cutter.open_clip(play=True)),
-                pystray.MenuItem('View last clip in explorer', lambda: cutter.open_clip(play=False)),
-                pystray.MenuItem('Concatenate two last clips', lambda: cutter.concatenate_last_clips()),
-                pystray.MenuItem('Delete most recent clip', lambda: cutter.delete_clip()),
-                pystray.MenuItem('Undo most recent action', cutter.undo)
-            )
+            if not TRAY_SHOW_QUICK_ACTIONS:
+                QUICK_ACTIONS_BASE = tuple()
+            else:
+                QUICK_ACTIONS_BASE = (
+                    pystray.MenuItem('Play most recent clip', lambda: cutter.open_clip(play=True)),
+                    pystray.MenuItem('View last clip in explorer', lambda: cutter.open_clip(play=False)),
+                    pystray.MenuItem('Concatenate two last clips', lambda: cutter.concatenate_last_clips()),
+                    pystray.MenuItem('Delete most recent clip', lambda: cutter.delete_clip()),
+                    pystray.MenuItem('Undo most recent action', cutter.undo)
+                )
 
             # set up final quick-action and recent-clip menus + setting their location/organization within the full menu
             RECENT_CLIPS_SEPARATOR = pystray.MenuItem(pystray.MenuItem(None, None), None, visible=True if TRAY_RECENT_CLIP_COUNT and TRAY_SHOW_QUICK_ACTIONS else False)
@@ -2181,7 +2266,8 @@ if __name__ == '__main__':
         # finally, run system tray icon
         logging.info('Running.')
         tray_icon.run()
-    except SystemExit: pass
+    except SystemExit:
+        pass
     except:
         logging.critical(f'(!) Error while initalizing {TITLE}: {format_exc()}')
         play_alert('error')
