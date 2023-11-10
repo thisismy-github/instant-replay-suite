@@ -1342,13 +1342,14 @@ class AutoCutter:
     # --- importing history ---
         # if history file exists, import clips
         if exists(HISTORY_PATH):
-            with open(HISTORY_PATH, 'r') as history:
+            with open(HISTORY_PATH, 'r', encoding='utf-16-le') as history:
 
                 # get all valid unique paths from history file, create a buffer of...
                 # ...clip objects, then start caching paths as strings outside buffer
                 lines = []
                 addpath = lines.append
                 for path in reversed(history.read().splitlines()):      # reversed() is an iterable, not an actual list (no performance loss)
+                    path = path.replace(u'\ufeff', '')                  # this strange character isn't even supposed to appear in this encoding
                     if path and exists(path) and path not in lines:     # faster than using a set
                         addpath(path)
 
@@ -1718,9 +1719,24 @@ class AutoCutter:
                         stat = getstat(path)                # skip non-mp4 files ↓
                         if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
                             logging.info(f'New video detected: {file}')
-                            while get_video_duration(path) == 0:
-                                logging.info('Video duration is still 0, retrying...')
-                                time.sleep(0.2)             # if duration is 0, the video is still being saved
+
+                            # if duration is 0, the file is either saving or corrupt -> use a timeout...
+                            # ...system, but with the timeout being based on `path`'s creation time
+                            if get_video_duration(path) == 0:
+                                timeout_seconds = 10
+                                delay = 0.2
+
+                                # on manual scans, skip empty videos that WOULD have timed out
+                                if manual_update and time.time() - stat.st_ctime > timeout_seconds:
+                                    logging.warning('Video detected during manual scan has duration of 0. Skipping.')
+                                    continue
+
+                                if (not manual_update) or (stat.st_ctime - last_clip_time < timeout_seconds):
+                                    time.sleep(0.1)         # sleep briefly before starting while-loop
+                                    while get_video_duration(path) == 0 and (not manual_update or timeout_seconds > 0):
+                                        logging.info('Video duration is still 0, retrying...')
+                                        timeout_seconds -= delay
+                                        time.sleep(delay)
 
                             clip = Clip(path, stat, rename=RENAME)
                             last_clips.append(clip)
@@ -1996,8 +2012,12 @@ if __name__ == '__main__':
 
                 # save history
                 logging.info(f'Clip history: {cutter.last_clips}')
-                with open(HISTORY_PATH, 'w') as history:
-                    history.write('\n'.join(c.path if isinstance(c, Clip) else c for c in cutter.last_clips))
+                with open(HISTORY_PATH, 'wb') as history:
+                    for c in cutter.last_clips:
+                        try:
+                            history.write(f'{(c.path if isinstance(c, Clip) else c)}\n'.encode("utf-16"))
+                        except:
+                            logging.info('(?) Error while saving history: ' + format_exc())
 
                 # unregister cfg.write if config has been externally modified
                 with open(CONFIG_PATH, 'rb') as file:
