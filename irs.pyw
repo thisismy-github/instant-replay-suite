@@ -31,7 +31,6 @@ tracemalloc.start()                 # start recording memory usage AFTER librari
 TODO !!! deleting a video removes WRONG video if you open while a new clip is being scanned (since the index changes)
 TODO deleting a video removes entry even if video fails to be deleted
 TODO add "clear duplicate entries" menu item
-TODO !!! backups do not get deleted in correct order with new folder structure system
 TODO open settings/open menu settings options
 TODO custom TTS alert for access errors
 TODO extended backup system with more than 1 undo possible at a time
@@ -167,7 +166,7 @@ def edit(*clips: Clip, undo_action: str):
         relative_paths = []
         backup_paths = []
         for clip in clips:
-            relative_paths.append(pjoin(clip.game, f'{timestamp}.{clip.name}'))
+            relative_paths.append(pjoin(clip.game, f'{timestamp} {clip.name}'))
             backup_paths.append(pjoin(BACKUP_FOLDER, relative_paths[-1]))
             renames(clip.path, backup_paths[-1])
 
@@ -1610,7 +1609,7 @@ class AutoCutter:
             Assumes all backups start with `time.time_ns()`. '''
         all_backups = []
         for folder in listdir(BACKUP_FOLDER):
-            try:                                    # get all backup .mp4s and delete empty subfolders
+            try:                                # get all backup .mp4s and delete empty subfolders
                 subfolder = pjoin(BACKUP_FOLDER, folder)
                 files = listdir(subfolder)
                 if files: all_backups.extend(pjoin(subfolder, file) for file in files if file[:19].isnumeric())
@@ -1626,14 +1625,15 @@ class AutoCutter:
             Outdated files are removed from `self.protected_paths`.
             Assumes all backups start with `time.time_ns()`. '''
         old_backups = 0
-        for path in sorted(self.get_all_backups(), reverse=True):
-            if path not in protected_paths:
+        for path in sorted(self.get_all_backups(), reverse=True, key=lambda p: p[p.rfind(sep) + 1:]):
+            if path not in protected_paths:     # strip dirname from path for sort ^
                 old_backups += 1
-                if old_backups >= MAX_BACKUPS:      # backup is too old
-                    try:    # remove backup, remove its folder if empty, and remove its protected status
+                if old_backups >= MAX_BACKUPS:  # backup is too old
+                    try:                        # remove backup + its folder if empty + its protected status
                         remove(path)
                         path_dirname, path_basename = splitpath(path)
-                        if not listdir(dirname(path)): os.rmdir(path_dirname)
+                        if not listdir(dirname(path)):
+                            os.rmdir(path_dirname)
 
                         protected_path = pjoin(VIDEO_FOLDER, basename(path_dirname), path_basename[20:])
                         try: self.protected_paths.remove(protected_path)
