@@ -790,10 +790,12 @@ if not LENGTH_DICTIONARY:
         cfg.load(name, alias)
 
 cfg.setSection(' --- Other Hotkeys --- ')
+cfg.comment('Leaving a hotkey blank will unbind it.')
 CONCATENATE_HOTKEY =  cfg.load('CONCATENATE', 'alt + c')
 MERGE_TRACKS_HOTKEY = cfg.load('MERGE_AUDIO_TRACKS', 'alt + m')
 DELETE_HOTKEY =       cfg.load('DELETE', 'ctrl + alt + d')
 UNDO_HOTKEY =         cfg.load('UNDO', 'alt + u')
+PLAY_HOTKEY =         cfg.load('PLAY_MOST_RECENT', 'alt + p')
 
 # --- Rename formatting ---
 cfg.setSection(' --- Renaming Clips --- ')
@@ -826,6 +828,7 @@ if USE_GAME_ALIASES:    # lowercase and remove double-spaces from names
             "Battlefield 4": "BF4",
             "Dead by Daylight": "DBD",
             "Counter-Strike Global Offensive": "CSGO",
+            "Counter-Strike 2": "CS2",
             "The Binding of Isaac Rebirth": "TBOI",
             "Team Fortress 2": "TF2",
             "Tom Clancy's Rainbow Six Siege": "R6"
@@ -1413,6 +1416,7 @@ class AutoCutter:
         if MERGE_TRACKS_HOTKEY: keyboard.add_hotkey(MERGE_TRACKS_HOTKEY, self.merge_clip_audio_tracks)
         if DELETE_HOTKEY:       keyboard.add_hotkey(DELETE_HOTKEY, self.delete_clip)
         if UNDO_HOTKEY:         keyboard.add_hotkey(UNDO_HOTKEY, self.undo)
+        if PLAY_HOTKEY:         keyboard.add_hotkey(PLAY_HOTKEY, lambda: cutter.open_clip(play=True))
         for key, length in LENGTH_DICTIONARY.items():
             keyboard.add_hotkey(key, self.trim_clip, args=(length,))
         logging.info(f'Auto-cutter initialized in {time.time() - start:.2f} seconds.')
