@@ -216,18 +216,23 @@ def index_safe(log_message: str):
     return actual_decorator
 
 
-def ffmpeg(infile: str, cmd: str, outfile: str):
-    ''' Creates an FFmpeg command and waits for it to execute. `cmd` is the
-        main command string to pass into FFmpeg. If `infile` or `outfile` are
-        given, FFmpeg input/output parameters are generated and inserted into
-        the command. '''
+def ffmpeg(infile: str, cmd: str, outfile: str, copy_track_titles: bool = True):
+    ''' Creates an FFmpeg `cmd` and waits for it to execute. If `infile` or
+        `outfile` are given, FFmpeg input/output parameters are generated and
+        added to `cmd` ("%in" may be included in `cmd` to manually specify
+        `infile`'s location, if desired). If `copy_track_titles` is True,
+        metadata parameters for transferring audio track titles from `infile`
+        (if provided) are generated and added to `cmd`. '''
 
     if infile:
         if '%in' not in cmd:
             cmd = '%in ' + cmd
         cmd = cmd.replace('%in', f'-i "{infile}"')
     if outfile:
-        cmd = f'{cmd} "{outfile}"'
+        if not infile or not copy_track_titles:
+            cmd = f'{cmd} "{outfile}"'
+        else:
+            cmd = f'{cmd} {get_audio_track_title_cmd(infile)} "{outfile}"'
 
     cmd = f'"{FFMPEG}" -y {cmd} -hide_banner -loglevel warning'
     logging.info(cmd)
@@ -289,6 +294,48 @@ def get_audio_tracks(path: str) -> int:
         if track.track_type == 'Audio':
             count += 1
     return count
+
+
+def get_audio_track_title_cmd(*paths: str) -> str:
+    ''' Creates arguments to insert into an FFmpeg command for setting the title
+        of each audio track in the command's output. Titles are taken from the
+        path in `paths` with the most audio tracks. '''
+
+    # get list of tracks for each path provided
+    audio_track_lists = {}
+    max_audio_track_count = -1
+    for path in paths:
+        mediainfo = parsemedia(path, library_file=MEDIAINFO_DLL_PATH)
+        audio_track_lists[path] = [t for t in mediainfo.tracks if t.track_type == 'Audio']
+        max_audio_track_count = max(max_audio_track_count, len(audio_track_lists[path]))
+
+    # generate generic track titles ("Track 2") as fallbacks
+    titles = [f'Track {index}' for index in range(1, max_audio_track_count + 1)]
+
+    # loop over every path that has the maximum number of tracks
+    for tracks in audio_track_lists.values():
+        if len(tracks) != max_audio_track_count:
+            continue
+
+        # strip 'SoundHandle / ' from the start of each track title
+        for index, track in enumerate(tracks):
+            title = track.title
+            if title[:11] == 'SoundHandle':
+                if title[11:14] == ' / ':
+                    title = title[14:]
+                else:
+                    title = title[11:]
+
+            # skip title it's empty
+            title = title.strip()
+            if not title:
+                continue
+            titles[index] = title
+
+    return ' '.join(
+        f'-metadata:s:a:{index} title="{title}"'
+        for index, title in enumerate(titles)
+    )
 
 
 def auto_rename_clip(path: str) -> tuple[str, str]:
@@ -1905,7 +1952,7 @@ class AutoCutter:
         logging.info(f'Trimming clip {clip.name} from {clip_length:.2f} to {length} seconds...')
 
         with edit(clip, undo_action=f'Trimmed to {length:g} seconds') as temp_path:
-            cmd = f'-ss {clip_length - length} %in -c:v copy -c:a copy'
+            cmd = f'-ss {clip_length - length} %in -c:v copy -c:a copy -map 0'
             ffmpeg(temp_path, cmd, clip.path)
         logging.info(f'Trim to {length} seconds successful.\n')
 
@@ -1929,7 +1976,9 @@ class AutoCutter:
                 lines = '\nfile \''.join(temp_paths).replace(sep, '/')
                 txt.write(f'file \'{lines}\'')
 
-            ffmpeg('', f'-f concat -safe 0 -i "{text_path}" -c copy', clip1_path)
+            cmd = '-f concat -safe 0 %in -c:v copy -c:a copy -map 0 '
+            cmd += get_audio_track_title_cmd(*temp_paths)
+            ffmpeg(text_path, cmd, clip1_path, copy_track_titles=False)
             delete(text_path)
         logging.info('Clips concatenated, renamed, refreshed, and cleaned up successfully.')
 
@@ -1948,7 +1997,8 @@ class AutoCutter:
         logging.info(f'Merging audio tracks for clip {clip.name}...')
 
         with edit(clip, undo_action='Merged tracks') as temp_path:
-            ffmpeg(temp_path, f'-filter_complex "[0:a]amerge=inputs={track_count}[a]" -ac 2 -map 0:v -map "[a]" -c:v copy', clip_path, copy_track_titles=False)
+            cmd = f'-filter_complex "[0:a]amerge=inputs={track_count}[a]" -ac 2 -map 0:v -map "[a]" -c:v copy'
+            ffmpeg(temp_path, cmd, clip_path, copy_track_titles=False)
         logging.info('Audio track merging successful.\n')
 
 
