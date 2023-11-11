@@ -222,12 +222,20 @@ def ffmpeg(infile: str, cmd: str, outfile: str):
         given, FFmpeg input/output parameters are generated and inserted into
         the command. '''
 
-    in_cmd = f'-i "{infile}"' if infile else ''
-    out_cmd = f'"{outfile}"' if outfile else ''
-    cmd = f'"{FFMPEG}" -y {in_cmd} {cmd} {out_cmd} -hide_banner -loglevel warning'
+    if infile:
+        if '%in' not in cmd:
+            cmd = '%in ' + cmd
+        cmd = cmd.replace('%in', f'-i "{infile}"')
+    if outfile:
+        cmd = f'{cmd} "{outfile}"'
+
+    cmd = f'"{FFMPEG}" -y {cmd} -hide_banner -loglevel warning'
     logging.info(cmd)
-    process = subprocess.Popen(cmd, shell=True)
-    process.wait()
+
+    # NOTE: startupinfo is windows-only
+    STARTUPINFO = subprocess.STARTUPINFO()
+    STARTUPINFO.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    subprocess.run(cmd, startupinfo=STARTUPINFO)
 
 
 def show_message(title: str, msg: str, flags: int = 0x00040030):
@@ -1897,7 +1905,8 @@ class AutoCutter:
         logging.info(f'Trimming clip {clip.name} from {clip_length:.2f} to {length} seconds...')
 
         with edit(clip, undo_action=f'Trimmed to {length:g} seconds') as temp_path:
-            ffmpeg(temp_path, f'-ss {clip_length - length} -c:v copy -c:a copy', clip.path)
+            cmd = f'-ss {clip_length - length} %in -c:v copy -c:a copy'
+            ffmpeg(temp_path, cmd, clip.path)
         logging.info(f'Trim to {length} seconds successful.\n')
 
 
@@ -1968,7 +1977,7 @@ class AutoCutter:
             clip.path = new_path
             renames(old_path, new_path)
             logging.info(f'Video size is {clip.size}. Compressing...')
-            #ffmpeg(clip.path, f'-i "%tp" -vcodec libx265 -crf 28 "{clip.path}"')
+            #ffmpeg(new_path, '-vcodec libx265 -crf 28 -c:a copy', old_path)
             logging.info(f'New compressed size is: {clip.size}')
             renames(new_path, old_path)
             clip.path = old_path
