@@ -5,7 +5,7 @@ markupsafe
 numpy
 psutil
 PyQt5
-pywin32_system32
+Pythonwin
 win32com
 api-ms-win*
 d3dcompiler_47.dll
@@ -21,6 +21,7 @@ win32pdh.pyd
 win32trace.pyd
 win32ui.pyd
 _asyncio.pyd
+_brotli*
 _bz2.pyd
 _cffi_backend*
 _decimal.pyd
@@ -30,4 +31,6 @@ _lzma.pyd
 _multiprocessing.pyd
 _overlapped.pyd
 _uuid.pyd
-_win32sysloader.pyd
+win32/win32trace.pyd
+win32/win32ui.pyd
+win32/_win32sysloader.pyd

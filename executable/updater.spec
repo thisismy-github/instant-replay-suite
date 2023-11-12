@@ -5,7 +5,7 @@ import os
 import sys
 block_cipher = None
 
-CWD = os.path.dirname(os.path.realpath(sys.argv[1]))
+CWD = os.path.dirname(os.path.realpath(sys.argv[0]))
 VERSION_FILE = os.path.join(CWD, 'version_info_updater.txt')
 ICON = os.path.join(CWD, 'icon_updater.ico')
 

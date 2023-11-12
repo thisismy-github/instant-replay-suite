@@ -1,6 +1,7 @@
-keyboard
-pymediainfo
-pystray
-requests
-send2trash
-win32-setctime
+keyboard>=0.13.5
+pymediainfo>=6.1.0
+pyinstaller>=6.2.0
+pystray>=0.19.5
+requests>=2.31.0
+send2trash>=1.8.2
+win32-setctime>=1.1.0

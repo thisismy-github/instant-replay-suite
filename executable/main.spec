@@ -5,7 +5,7 @@ import os
 import sys
 block_cipher = None
 
-CWD = os.path.dirname(os.path.realpath(sys.argv[1]))
+CWD = os.path.dirname(os.path.realpath(sys.argv[0]))
 SCRIPT_DIR = os.path.dirname(CWD)
 VERSION_FILE = os.path.join(CWD, 'version_info_main.txt')
 ICON = os.path.join(CWD, 'icon_main.ico')
@@ -18,7 +18,7 @@ a = Analysis([os.path.join(SCRIPT_DIR, 'irs.pyw')],
              hiddenimports=[],
              hookspath=[],
              hooksconfig={},
-             runtime_hooks=[os.path.join(CWD, 'hook.py')],
+             runtime_hooks=[],
              excludes=[],
              win_no_prefer_redirects=False,
              win_private_assemblies=False,
@@ -33,6 +33,7 @@ exe = EXE(pyz,
           [],
           exclude_binaries=True,
           name='InstantReplaySuite',
+		  contents_directory='bin',
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,
