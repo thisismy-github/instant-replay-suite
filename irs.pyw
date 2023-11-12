@@ -129,6 +129,22 @@ MEDIAINFO_DLL_PATH = pjoin(BIN_FOLDER, 'MediaInfo.dll') if IS_COMPILED else None
 # ---------------------
 # Logging
 # ---------------------
+if os.path.exists(LOG_PATH):                        # backup existing log and delete outdated logs
+    max_logs = 10
+    log_path = LOG_PATH
+    temp_dir = f'{BIN_FOLDER}{sep}logs'
+    prefix, suffix = os.path.splitext(os.path.basename(log_path))
+    p_len = len(prefix)
+    s_len = len(suffix)
+    if os.path.isdir(temp_dir):
+        logs = [f for f in os.listdir(temp_dir) if f[:p_len] == prefix and f[-s_len:] == suffix]
+        for outdated_log in logs[:-(max_logs - 1)]:
+            try: os.remove(f'{temp_dir}{sep}{outdated_log}')
+            except: pass
+    new_name = f'{prefix}.{os.stat(log_path).st_mtime_ns}{suffix}'
+    try: os.renames(log_path, f'{temp_dir}{sep}{new_name}')
+    except: pass
+
 logging.basicConfig(
     level=logging.INFO,
     encoding='utf-16',
