@@ -960,6 +960,81 @@ class _ConfigParseBetter:
         parser.remove_section(section.name)
 
 
+    def moveSetting(self, oldKey, newSection, newKey=None, oldSection=None, replace=True):
+        ''' Moves an option from `oldSection.oldKey` to `newSection.newKey`,
+            overwriting `newSection.newKey` if it already exists and `replace`
+            is True. If `newKey` is not provided, `newSection.oldKey` is used.
+            If `oldSection` is not provided, the current section is used.
+            Returns the value of `newSection.newKey` after the move.
+            If `oldSection.oldKey` does not exist, None is returned. '''
+        old_section = self.getSection(oldSection)
+        new_section = self.getSection(newSection)
+        old_section_dict: dict = self.__parser._sections[old_section.name]
+        new_section_dict: dict = self.__parser._sections[new_section.name]
+
+        # replace the new setting if necessary & get value to return later
+        newKey = newKey or oldKey
+        already_exists = newKey in new_section_dict
+        if replace or not already_exists:
+            try: value = self.__dict__[old_section.name].__dict__[oldKey]
+            except KeyError: return None
+            new_section_dict[newKey] = old_section_dict[oldKey]
+        else:   # `already_exists` must be True if we got this far
+            value = self.__dict__[new_section.name].__dict__[newKey]
+        del old_section_dict[oldKey]
+
+        try:    # replace `old` with `new` within our order
+            index = KEY_ORDER.index(old_section.name + oldKey)
+            KEY_ORDER.pop(index)
+            if not already_exists:
+                KEY_ORDER.insert(index, new_section.name + newKey)
+        except:
+            pass
+        return value
+
+
+    def renameSetting(self, old, new, replace=True, section=None):
+        ''' Renames an option from `section.old` to `section.new`, overwriting
+            the `new` key if it already exists and `replace` is True. Returns
+            the value of `section.new` after the rename. If `section.old`
+            does not exist, None is returned. '''
+        section = self.getSection(section)
+        section_name = section.name
+        section_dict = self.__parser._sections[section_name]
+
+        # replace the new setting if necessary & get value to return later
+        already_exists = new in section_dict
+        if replace or not already_exists:
+            try: value = self.__dict__[section_name].__dict__[old]
+            except KeyError: return None
+            section_dict[new] = section_dict[old]
+        else:   # `already_exists` must be True if we got this far
+            value = self.__dict__[section_name].__dict__[new]
+        del section_dict[old]
+
+        try:    # replace `old` with `new` within our order
+            index = KEY_ORDER.index(section_name + old)
+            KEY_ORDER.pop(index)
+            if not already_exists:
+                KEY_ORDER.insert(index, section_name + new)
+        except:
+            pass
+        return value
+
+
+    def deleteSetting(self, key, section=None):
+        section = self.getSection(section)
+        section_name = section.name
+        section_dict = self.__parser._sections[section_name]
+        del section_dict[key]
+
+        try:    # remove from our order
+            order_key = section_name + key
+            KEY_ORDER.pop(KEY_ORDER.index(order_key))
+        except:
+            pass
+
+
     def setFilepath(self, filepath, appdata=False):
         self.__filepath = self.createConfigPath(filepath, appdata)
 

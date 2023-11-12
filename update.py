@@ -21,6 +21,7 @@ CWD = None
 RESOURCE_FOLDER = None
 BIN_FOLDER = None
 show_message = None
+cfg = None
 
 HYPERLINK = None
 logger = logging.getLogger('update.py')
@@ -207,7 +208,8 @@ def download_update(latest_version: str, download_url: str, download_path: str, 
                                 deleted.append(f'"{folder_name}/{filename}"')
                             elif os.path.getsize(path) != int(expected_size):
                                 edited.append(f'"{folder_name}/{filename}"')
-                    except: pass
+                    except:
+                        pass
         ignored = edited + deleted      # we handle both edits and deletes the same way, but this may change
         logger.info(f'Ignoring edited resources: {ignored}')
 
@@ -224,7 +226,8 @@ def download_update(latest_version: str, download_url: str, download_path: str, 
         subprocess.Popen(updater_cmd)
         return True
 
-    except InsufficientSpaceError: pass
+    except InsufficientSpaceError:
+        pass
     except:
         logger.error(f'(!) Could not download latest version. New naming format? Missing updater? {format_exc()}')
 
@@ -270,13 +273,25 @@ def validate_update(update_report_path: str) -> None:
     except: logger.warning('Failed to delete update report after validation.')
 
     logger.info('Update validated.')
-    #update_migration(version_change.split(' -> ')[0])
+    update_migration(version_change.split(' -> ')[0])
     msg = f'Update from {version_change} successful.'
     show_message('Update successful', msg, 0x00040040)              # i-symbol + stay on top
 
 
-# NOTE: Not needed yet, thankfully.
-#def update_migration(old_version: str) -> None:
-#    ''' Handles additional work required to migrate
-#        `old_version` to the latest version, if any. '''
-#    older_than = lambda v: old_version != v and get_later_version(old_version, v) == v
+def update_migration(old_version: str) -> None:
+    ''' Handles additional work required to migrate
+        `old_version` to the latest version, if any. '''
+    older_than = lambda v: old_version != v and get_later_version(old_version, v) == v
+    if older_than('1.3.0'):
+        try:
+            import irs
+            cfg.load('MAX_RECENT_CLIPS', 10, section=' --- Tray Menu Recent Clips --- ')
+            irs.TRAY_RECENT_CLIP_COUNT = cfg.moveSetting(
+                oldKey='MAX_RECENT_CLIPS',
+                oldSection=' --- Tray Menu Recent Clips --- ',
+                newKey='MAX_CLIPS_VISIBLE_IN_MENU',
+                newSection=' --- General --- ',
+                replace=False
+            )
+        except:
+            pass
