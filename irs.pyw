@@ -29,7 +29,6 @@ tracemalloc.start()                 # start recording memory usage AFTER librari
 
 '''
 TODO !!! deleting a video removes WRONG video if you open while a new clip is being scanned (since the index changes)
-TODO deleting a video removes entry even if video fails to be deleted
 TODO add "clear duplicate entries" menu item
 TODO open settings/open menu settings options
 TODO extended backup system with more than 1 undo possible at a time
@@ -614,7 +613,8 @@ def verify_ffmpeg() -> str:
 def verify_config_files() -> str:
     ''' Displays a message if config and/or menu file is missing, then gives
         user the option to create them immediately and quit or to continue
-        with default settings and a default menu. '''
+        with a default menu/settings. Returns the config file's MD5 hash if
+        it existed, otherwise an empty string. '''
 
     logging.info('Verifying config.settings and config.menu...')
     if NO_CONFIG or NO_MENU:
@@ -644,6 +644,7 @@ def verify_config_files() -> str:
     if not NO_CONFIG:
         with open(CONFIG_PATH, 'rb') as file:
             return hashlib.md5(file.read()).hexdigest()
+    return ''
 
 
 def sanitize_json(
@@ -1857,7 +1858,8 @@ class AutoCutter:
         ''' Deletes a clip at the given `index`. '''
         if patient and not self.wait(alert='Delete'): return    # not a part of get_clip(), to simplify things
         logging.info(f'Deleting clip at index {index}: {self.last_clips[index].path}')
-        delete(self.pop(index).path)                            # pop and remove directly
+        delete(self.last_clips[index].path)
+        self.pop(index)                                         # pop AFTER successful deletion
         logging.info('Deletion successful.\n')
 
 
@@ -1992,14 +1994,16 @@ class AutoCutter:
         # write list of clips to text file (/ as separator and single quotes to avoid ffmpeg errors)
         with edit(clip1, clip2, undo_action='Concatenated') as temp_paths:
             text_path = pjoin(CWD, f'{time.time_ns()}.concatlist.txt')
-            with open(text_path, 'w') as txt:
-                lines = '\nfile \''.join(temp_paths).replace(sep, '/')
-                txt.write(f'file \'{lines}\'')
+            try:
+                with open(text_path, 'w') as txt:
+                    lines = '\nfile \''.join(temp_paths).replace(sep, '/')
+                    txt.write(f'file \'{lines}\'')
 
-            cmd = '-f concat -safe 0 %in -c:v copy -c:a copy -map 0 '
-            cmd += get_audio_track_title_cmd(*temp_paths)
-            ffmpeg(text_path, cmd, clip1_path, copy_track_titles=False)
-            delete(text_path)
+                cmd = '-f concat -safe 0 %in -c:v copy -c:a copy -map 0 '
+                cmd += get_audio_track_title_cmd(*temp_paths)
+                ffmpeg(text_path, cmd, clip1_path, copy_track_titles=False)
+            finally:                                        # delete text file no matter what
+                delete(text_path)
         logging.info('Clips concatenated, renamed, refreshed, and cleaned up successfully.')
 
 
