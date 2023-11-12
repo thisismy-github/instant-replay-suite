@@ -101,7 +101,7 @@ remove = os.remove
 # Base constants
 # ---------------------
 TITLE = 'Instant Replay Suite'
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 REPOSITORY_URL = 'https://github.com/thisismy-github/instant-replay-suite'
 
 # ---
@@ -1190,6 +1190,7 @@ class Icon(pystray._win32.Icon):
         self.is_open = False
 
 
+    # https://stackoverflow.com/a/68845977
     def close(self):
         ''' Uses the `WM_CANCELMODE` signal to manually close the menu. '''
         try: win32.PostMessage(self._menu_hwnd, WM_CANCELMODE, 0, 0)
@@ -1264,7 +1265,7 @@ class Icon(pystray._win32.Icon):
             self._icon_handle = handle
             return
 
-        # if it wasn't valid, take the .exe's icon (if we're compiled) -> https://stackoverflow.com/a/110777
+        # if it wasn't valid, take the .exe's icon (if we're compiled)
         except:
             if IS_COMPILED:
                 try:
@@ -1276,7 +1277,7 @@ class Icon(pystray._win32.Icon):
 
                     resource = win32api.LoadResource(None, RT_ICON, icon_index)
                     handle = win32gui.CreateIconFromResource(resource, True)
-                    if handle is None:
+                    if handle is None:      # ^ https://stackoverflow.com/a/110777
                         raise
 
                     self._icon_handle = handle
