@@ -32,7 +32,6 @@ TODO !!! deleting a video removes WRONG video if you open while a new clip is be
 TODO deleting a video removes entry even if video fails to be deleted
 TODO add "clear duplicate entries" menu item
 TODO open settings/open menu settings options
-TODO custom TTS alert for access errors
 TODO extended backup system with more than 1 undo possible at a time
 TODO extend multi-track recording options as a submenu
         - remove microphone and/or system audio tracks
@@ -162,6 +161,7 @@ def edit(*clips: Clip, undo_action: str):
         Usage: `with edit(clip1, undo_action='Trim') as backup_path:` '''
 
     try:    # enter code - creating backup paths and moving the clips
+        log_state = 'while preparing to perform edit'
         timestamp = time.time_ns()
         relative_paths = []
         backup_paths = []
@@ -175,6 +175,8 @@ def edit(*clips: Clip, undo_action: str):
         else:                      yield backup_paths
 
         # exit code - writing to the undo file and refreshing clips
+        # NOTE: we DON'T want to do this after an error -> don't use a finally-statement
+        log_state = 'while cleaning up after performing edit'
         with open(UNDO_LIST_PATH, 'w') as undo:
             backups        = ' -> '.join(relative_paths)
             original_paths = ' -> '.join(clip.path for clip in clips)
@@ -187,14 +189,22 @@ def edit(*clips: Clip, undo_action: str):
                 setctime(clip_path, clip.time)      # retain original creation time
                 clip.refresh(clip_path)
 
-    # remove any new files created and restore clips to their original paths
-    except:
-        logging.error(f'(!) Error WHILE performing edit "{undo_action}": {format_exc()}')
+    # remove any new files created and restore clips to their original paths (unless it was a PermissionError)
+    except Exception as error:
+        if isinstance(error, PermissionError):
+            play_alert('permission error')
+            logging.error(f'(!) Access denied {log_state} "{undo_action}": {format_exc()}')
+        else:
+            play_alert('error')
+            logging.error(f'(!) Error {log_state} "{undo_action}": {format_exc()}')
         for backup_path, clip in zip(backup_paths, clips):
             clip_path = clip.path
-            if exists(clip_path):
-                remove(clip_path)
-            renames(backup_path, clip_path)
+            try:
+                if exists(clip_path):
+                    remove(clip_path)
+                renames(backup_path, clip_path)
+            except PermissionError:
+                pass
         logging.info('Successfully restored clip(s) after error.')
 
 
@@ -209,9 +219,14 @@ def index_safe(log_message: str):
                 return func(*args, **kwargs)
             except (IndexError, AssertionError):
                 return
-            except:
-                logging.error(f'(!) Error while {log_message}: {format_exc()}')
+            except PermissionError:
+                play_alert('permission error')
+                logging.error(f'(!) Access denied {log_message}: {format_exc()}')
+            except Exception as error:
+                if str(error) == 'generator didn\'t yield':
+                    return                          # happens if `edit()` fails before the yield
                 play_alert('error')
+                logging.error(f'(!) Error {log_message}: {format_exc()}')
         return wrapper
     return actual_decorator
 
@@ -2017,10 +2032,9 @@ class AutoCutter:
         try:
             Thread(target=self.compress_clip_thread, args=(clip,), daemon=True).start()
         except:
+            clip.working = False
             logging.error(f'(!) Error while creating compression thread: {format_exc()}')
             play_alert('error')
-        finally:
-            clip.working = False
 
 
     def compress_clip_thread(self, clip: Clip):
