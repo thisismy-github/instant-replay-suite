@@ -28,7 +28,6 @@ from configparsebetter import ConfigParseBetter
 tracemalloc.start()                 # start recording memory usage AFTER libraries have been imported
 
 '''
-TODO !!! deleting a video removes WRONG video if you open while a new clip is being scanned (since the index changes)
 TODO add "clear duplicate entries" menu item
 TODO open settings/open menu settings options
 TODO extended backup system with more than 1 undo possible at a time
@@ -1158,16 +1157,47 @@ if not exists(BACKUP_FOLDER): makedirs(BACKUP_FOLDER)
 WM_LBUTTONUP = 0x0202
 WM_RBUTTONUP = 0x0205
 WM_MBUTTONUP = 0x0208
+WM_CANCELMODE = 31
 class Icon(pystray._win32.Icon):
     ''' This subclass auto-updates the menu before opening to allow dynamic
-        titles/actions to always be up-to-date, adds support for middle-clicks
-        and custom menu alignments, and allows icons to be passed as strings
-        rather than using `PIL.Image.Image` (removing it as a dependency by
-        just assuming a given .ICO is valid, and using the .exe's icon if it
-        isn't). See original _win32.Icon class for original comments. '''
+        titles/actions to always be up-to-date, adds support for middle-clicks,
+        custom menu alignments, and manual `WM_NOTIFY` calls (to reopen the menu
+        in-place), and allows icons to be passed as strings rather than using
+        `PIL.Image.Image` (removing it as a dependency by always assuming a
+        given .ICO is valid, and using the .exe's icon if it isn't).
+
+        See the `pystray._win32.Icon` class for its original comments. '''
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.last_pos = (0, 0)
+        self.is_open = False
+
+
+    def close(self):
+        ''' Uses the `WM_CANCELMODE` signal to manually close the menu. '''
+        try: win32.PostMessage(self._menu_hwnd, WM_CANCELMODE, 0, 0)
+        except: logging.error(f'(!) Failed to signal our system tray icon to close: {format_exc()}')
+
+
+    def reopen_in_place(self, force: bool = False):
+        ''' Uses the `WM_CANCELMODE` and `WM_NOTIFY` signals to manually close
+            and reopen the menu. A `wparam` of 1 is sent with the `WM_NOTIFY`
+            signal to let `self._on_notify()` know it should use `self.last_pos`
+            instead of our cursor's position. If `force` is True, the menu is
+            reopened even if it's not open. '''
+        if self.is_open or force:
+            try:
+                win32.PostMessage(self._menu_hwnd, WM_CANCELMODE, 0, 0)
+                win32.PostMessage(self._hwnd, win32.WM_NOTIFY, 1, WM_RBUTTONUP)
+            except:
+                logging.error(f'(!) Failed to signal our system tray icon to close and reopen: {format_exc()}')
+
 
     def _on_notify(self, wparam: int, lparam: int):
-        ''' Adds auto-updating, middle-click, and menu alignment support. '''
+        ''' Adds auto-updating, middle-click, and menu alignment support. Call
+            `win32.PostMessage(self._hwnd, win32.WM_NOTIFY, 1, WM_RBUTTONUP)`
+            to manually open the context menu from `self.last_pos`. '''
         if lparam == WM_LBUTTONUP:
             self()
 
@@ -1176,22 +1206,27 @@ class Icon(pystray._win32.Icon):
                 MIDDLE_CLICK_ACTION()
 
         elif self._menu_handle and lparam == WM_RBUTTONUP:
-            self._update_menu()
-
+            self._update_menu()             # auto-update the menu before opening it
             win32.SetForegroundWindow(self._hwnd)
-            point = ctypes.wintypes.POINT()
-            win32.GetCursorPos(ctypes.byref(point))
             hmenu, descriptors = self._menu_handle
 
+            # `wparam` is seemingly always 0, so we send 1 when manually posting...
+            # ...`WM_NOTIFY` signals to let us know when to reuse our last position
+            if wparam != 1:                 # if it's NOT 1, use cursor position like normal
+                point = ctypes.wintypes.POINT()
+                win32.GetCursorPos(ctypes.byref(point))
+                self.last_pos = (point.x, point.y)
+
+            self.is_open = True             # mark that the menu is open
             index = win32.TrackPopupMenuEx(
                 hmenu,
                 MENU_ALIGNMENT | win32.TPM_RETURNCMD,
-                point.x,
-                point.y,
+                *self.last_pos,
                 self._menu_hwnd,
                 None
             )
 
+            self.is_open = False            # mark that the menu has been closed
             if index > 0:
                 descriptors[index - 1](self)
 
@@ -1763,7 +1798,7 @@ class AutoCutter:
     def check_for_clips_thread(self, manual_update: bool = False, from_time: float = None):
         ''' See `self.check_for_clips()` for details. '''
         try:
-            added = 0
+            new_clips = []
             old_memory = get_memory()
             last_clips = self.last_clips
 
@@ -1814,10 +1849,12 @@ class AutoCutter:
                                         time.sleep(delay)
 
                             clip = Clip(path, stat, rename=RENAME)
-                            last_clips.append(clip)
-                            added += 1
                             if manual_update:                   # don't stop after first video on manual scans
-                                continue
+                                new_clips.append(clip)          # don't add directly (indexes will desync until...
+                                continue                        # ...the finally-statement if the menu is open)
+
+                            # for automatic scans -> append clip to end, update cache, and immediately return
+                            last_clips.append(clip)
                             return self.cache_clip()
 
         except:
@@ -1826,10 +1863,11 @@ class AutoCutter:
 
         finally:
             new_memory = get_memory()
-            logging.info(f'Memory usage after adding {added} clips: {new_memory:.2f}mb (+{new_memory - old_memory:.2f}mb)\n')
 
             # sort `last_clips` and then verify the cache
             if manual_update:
+                logging.info(f'Memory usage after adding {len(new_clips)} clips: {new_memory:.2f}mb (+{new_memory - old_memory:.2f}mb)\n')
+                last_clips.extend(new_clips)
                 last_clips.sort(key=lambda clip: clip.time if isinstance(clip, Clip) else getstat(clip).st_ctime)
                 for index, clip in enumerate(reversed(last_clips)):
                     if isinstance(clip, Clip) and index >= CLIP_BUFFER:
@@ -1837,6 +1875,14 @@ class AutoCutter:
                     elif isinstance(clip, str) and index < CLIP_BUFFER:
                         last_clips[-index - 1] = Clip(path, stat, rename=RENAME)
                 logging.info('Manual scan complete.')
+
+                # if the menu is open while we're adding items, signal it to close and reopen...
+                # ...in-place to refresh it and fix many headaches caused by desynced indexes
+                if new_clips:
+                    tray_icon.reopen_in_place()                 # manual scan + items detected
+            else:
+                logging.info(f'Memory usage after adding new clip: {new_memory:.2f}mb (+{new_memory - old_memory:.2f}mb)\n')
+                tray_icon.reopen_in_place()                     # automatic scan -> always reopen
 
             self.waiting_for_clip = False
             gc.collect(generation=2)
