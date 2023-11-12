@@ -285,15 +285,15 @@ def get_video_duration(path: str) -> float:
     return 0
 
 
-def get_audio_tracks(path: str) -> int:
-    ''' Returns the number of audio tracks for the video at `path`. '''
+def get_audio_track_count(path: str) -> int:
+    ''' Returns the number of audio tracks in `path`. '''
     # an `audio_tracks` attribute exists but it's just a slower version of this
-    count = 0
+    audio_track_count = 0
     mediainfo = parsemedia(path, library_file=MEDIAINFO_DLL_PATH)
     for track in mediainfo.tracks:
         if track.track_type == 'Audio':
-            count += 1
-    return count
+            audio_track_count += 1
+    return audio_track_count
 
 
 def get_audio_track_title_cmd(*paths: str) -> str:
@@ -1075,9 +1075,9 @@ NO_CONFIG = not exists(CONFIG_PATH)
 NO_MENU = TRAY_ADVANCED_MODE and not exists(CUSTOM_MENU_PATH)
 
 # misc constants
-TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY = '?recency' in TRAY_RECENT_CLIP_NAME_FORMAT
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCY =      '?recency' in TRAY_RECENT_CLIP_NAME_FORMAT
 TRAY_RECENT_CLIP_NAME_FORMAT_HAS_RECENCYSHORT = '?recencyshort' in TRAY_RECENT_CLIP_NAME_FORMAT
-TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR = '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
+TRAY_RECENT_CLIP_NAME_FORMAT_HAS_CLIPDIR =      '?clipdir' in TRAY_RECENT_CLIP_NAME_FORMAT
 
 # constructing paths for misc files
 if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
@@ -1086,7 +1086,7 @@ if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
 else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
 
 # ensuring above paths are valid
-if not exists(dirname(HISTORY_PATH)): makedirs(dirname(HISTORY_PATH))
+if not exists(dirname(HISTORY_PATH)):   makedirs(dirname(HISTORY_PATH))
 if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
 
 # constructing icon path -> first try resource folder, then CWD
@@ -1184,30 +1184,34 @@ class Icon(pystray._win32.Icon):
         ''' Removes usage of `serialized_image` context manager and thus the
             the dependency on `PIL.Image.Image` by assuming `self._icon`
             is the path to a valid .ICO file. Uses .exe's icon if needed. '''
-        if self._icon_handle: return
-        args = (win32.IMAGE_ICON, 0, 0, win32.LR_DEFAULTSIZE | win32.LR_LOADFROMFILE)
+        if self._icon_handle:
+            return
 
+        # assume `self._icon` is valid and try loading it directly
         try:
+            args = (win32.IMAGE_ICON, 0, 0, win32.LR_DEFAULTSIZE | win32.LR_LOADFROMFILE)
             handle = win32.LoadImage(None, self._icon, *args)
             if handle is None:
                 raise
+
             self._icon_handle = handle
             return
+
+        # if it wasn't valid, take the .exe's icon (if we're compiled) -> https://stackoverflow.com/a/110777
         except:
-            if IS_COMPILED:                 # if we're compiled, take the .exe's icon
+            if IS_COMPILED:
                 try:
-                    # https://stackoverflow.com/questions/90775/how-do-you-load-an-embedded-icon-from-an-exe-file-with-pywin32
                     import win32api         # these libraries cost almost nothing to import...
                     import win32gui         # ...and don't add any files to our compilation
 
-                    # NOTE: for our current icon, index 4 is the best icon, even at different scales
                     RT_ICON = 3             # this is so we don't need `win32con.RT_ICON`
-                    icon_index = 4
+                    icon_index = 4          # NOTE: for our current icon, index 4 is the best (even at different scales)
 
                     resource = win32api.LoadResource(None, RT_ICON, icon_index)
                     handle = win32gui.CreateIconFromResource(resource, True)
                     if handle is None:
                         raise
+
                     self._icon_handle = handle
                     return logging.warning(f'Custom icon at "{self._icon}" was invalid. Using .exe\'s icon.')
                 except:
@@ -1225,7 +1229,7 @@ class Icon(pystray._win32.Icon):
 INSTANT_REPLAY_HOTKEY_SCANCODES = tuple(sorted(keyboard.key_to_scan_codes(key.strip()) for key in INSTANT_REPLAY_HOTKEY.split('+')))
 ALL_INSTANT_REPLAY_HOTKEY_SCANCODES = tuple(code for code_tuple in INSTANT_REPLAY_HOTKEY_SCANCODES for code in code_tuple)
 ACTUAL_INSTANT_REPLAY_HOTKEY = tuple(sorted(code_tuple[0] for code_tuple in INSTANT_REPLAY_HOTKEY_SCANCODES))
-KEYPAD_DUPLICATES = (71, 72, 73, 75, 77, 79, 80, 81, 82, 83)   # 7, 8, 9, 4, 6, 1, 2, 3, 0, 'decimal'
+KEYPAD_DUPLICATES = (71, 72, 73, 75, 77, 79, 80, 81, 82, 83)    # 7, 8, 9, 4, 6, 1, 2, 3, 0, 'decimal'
 def pre_process_event(self, event: keyboard.KeyboardEvent) -> int | bool:
     ''' This is an *extremely* convulted way of dealing with
         two major shortcomings with the keyboard library:
@@ -1748,16 +1752,16 @@ class AutoCutter:
             last_clips = self.last_clips
 
             # determine the timestamp that all new videos should be after
-            if not manual_update:   # auto-update -> wait for instant replay to finish saving
+            if not manual_update:               # auto-update -> wait for instant replay to finish saving
                 logging.info('Instant replay detected! Waiting 3 seconds...')
                 last_clip_time = time.time() - 1
                 time.sleep(3)
             elif from_time is not None:
                 last_clip_time = from_time
-            else:                   # if no clips in last_clips -> use history file's creation date
+            else:                               # if no clips in last_clips -> use history file's creation date
                 try:
                     last_clip_time = last_clips[-1].time
-                except IndexError:  # if no history file -> use script's start time
+                except IndexError:              # if no history file -> use script's start time
                     try: last_clip_time = getstat(HISTORY_PATH).st_ctime
                     except: last_clip_time = SCRIPT_START_TIME
             logging.info(f'Scanning {VIDEO_FOLDER} for videos')
@@ -1766,12 +1770,12 @@ class AutoCutter:
             for filename in listdir(VIDEO_FOLDER):
                 if filename in IGNORE_VIDEOS_IN_THESE_FOLDERS: continue
                 folder = pjoin(VIDEO_FOLDER, filename)
-                if folder == BACKUP_FOLDER: continue        # user might use absolute path for backup folder
+                if folder == BACKUP_FOLDER: continue            # user might use absolute path for backup folder
 
                 if isdir(folder):
                     for file in listdir(folder):
                         path = pjoin(folder, file)
-                        stat = getstat(path)                # skip non-mp4 files ↓
+                        stat = getstat(path)                    # skip non-mp4 files ↓
                         if last_clip_time < stat.st_ctime and file[-4:] == '.mp4':
                             logging.info(f'New video detected: {file}')
 
@@ -1787,7 +1791,7 @@ class AutoCutter:
                                     continue
 
                                 if (not manual_update) or (stat.st_ctime - last_clip_time < timeout_seconds):
-                                    time.sleep(0.1)         # sleep briefly before starting while-loop
+                                    time.sleep(0.1)             # sleep briefly before starting while-loop
                                     while get_video_duration(path) == 0 and (not manual_update or timeout_seconds > 0):
                                         logging.info('Video duration is still 0, retrying...')
                                         timeout_seconds -= delay
@@ -1796,8 +1800,9 @@ class AutoCutter:
                             clip = Clip(path, stat, rename=RENAME)
                             last_clips.append(clip)
                             added += 1
-                            if manual_update: continue      # don't stop after first video on manual scans
-                            else: return self.cache_clip()
+                            if manual_update:                   # don't stop after first video on manual scans
+                                continue
+                            return self.cache_clip()
 
         except:
             logging.error(f'(!) Error while checking for new clips: {format_exc()}')
@@ -1969,8 +1974,8 @@ class AutoCutter:
         clip1_path = clip1.path
         logging.info(f'Concatenating clips "{clip1_path}" and "{clip2.path}"')
 
+        # write list of clips to text file (/ as separator and single quotes to avoid ffmpeg errors)
         with edit(clip1, clip2, undo_action='Concatenated') as temp_paths:
-            # write list of clips to text file (/ as separator and single quotes to avoid ffmpeg errors)
             text_path = pjoin(CWD, f'{time.time_ns()}.concatlist.txt')
             with open(text_path, 'w') as txt:
                 lines = '\nfile \''.join(temp_paths).replace(sep, '/')
@@ -1990,7 +1995,7 @@ class AutoCutter:
             https://stackoverflow.com/questions/54060729/ffmpeg-how-to-merge-all-audio-streams-into-stereo '''
         clip = self.get_clip(index, alert='Merge', min_clips=1, patient=patient)
         clip_path = clip.path
-        track_count = get_audio_tracks(clip_path)
+        track_count = get_audio_track_count(clip_path)
         if track_count <= 1:                                # return log message for <2 audio tracks
             msg = ('only has 1', '') if track_count else ('has no', 's')
             return logging.info(f'(?) Video {msg[0]} audio track{msg[1]}.')
@@ -2152,7 +2157,7 @@ if __name__ == '__main__':
                 if TRAY_RECENT_CLIPS_SUBMENU_EXTRA_INFO:
                     last_clips = cutter.last_clips
                     extra_info_items = (
-                        pystray.MenuItem(pystray.MenuItem(None, None), None),
+                        SEPARATOR,
                         pystray.MenuItem(lambda _: last_clips[index].length_size_string if len(last_clips) >= -index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False),
                         pystray.MenuItem(lambda _: last_clips[index].full_date if len(last_clips) >= -index else TRAY_RECENT_CLIP_DEFAULT_TEXT, None, enabled=False)
                     )
@@ -2177,14 +2182,14 @@ if __name__ == '__main__':
                         return pystray.Menu(*items)
 
                 return pystray.Menu(
-                    pystray.MenuItem('Trim...', get_trim_submenu()),
-                    pystray.MenuItem('Play...', lambda: cutter.open_clip(index, play=True, patient=False)),
-                    pystray.MenuItem('Explore...', lambda: cutter.open_clip(index, play=False, patient=False)),
-                    pystray.MenuItem('Splice...', lambda: cutter.concatenate_last_clips(index, patient=False)),
-                    #pystray.MenuItem('Compress...', lambda: cutter.compress_clip(index, patient=False)),
-                    #pystray.MenuItem('Audio only...', lambda: cutter.???(index, patient=False)),
-                    #pystray.MenuItem('Video only...', lambda: cutter.???(index, patient=False)),
-                    pystray.MenuItem('Delete...', lambda: cutter.delete_clip(index, patient=False)),
+                    pystray.MenuItem('Trim...',         get_trim_submenu()),
+                    pystray.MenuItem('Play...',         lambda: cutter.open_clip(index, play=True, patient=False)),
+                    pystray.MenuItem('Explore...',      lambda: cutter.open_clip(index, play=False, patient=False)),
+                    #pystray.MenuItem('Compress...',    lambda: cutter.compress_clip(index, patient=False)),
+                    #pystray.MenuItem('Audio only...',  lambda: cutter.???(index, patient=False)),
+                    #pystray.MenuItem('Video only...',  lambda: cutter.???(index, patient=False)),
+                    pystray.MenuItem('Delete...',       lambda: cutter.delete_clip(index, patient=False)),
+                    pystray.MenuItem('Splice...',       lambda: cutter.concatenate_last_clips(index, patient=False)),
                     pystray.MenuItem('Merge tracks...', lambda: cutter.merge_clip_audio_tracks(index, patient=False)),
                     *extra_info_items
                 )
@@ -2197,7 +2202,7 @@ if __name__ == '__main__':
 
         # creating the base recent-clip menu
         title_callback = lambda index: lambda _: get_clip_tray_title(index)  # workaround for python bug/oddity involving creating lambdas in iterables
-        RECENT_CLIPS_BASE = tuple(pystray.MenuItem(title_callback(i), get_clip_tray_action(i)) for i in range(-1, (TRAY_RECENT_CLIP_COUNT * -1) - 1, -1))
+        RECENT_CLIPS_BASE = tuple(pystray.MenuItem(title_callback(i), get_clip_tray_action(i)) for i in range(-1, -TRAY_RECENT_CLIP_COUNT - 1, -1))
 
         # action dictionary
         TRAY_ACTIONS = {
@@ -2278,11 +2283,11 @@ if __name__ == '__main__':
                 QUICK_ACTIONS_BASE = tuple()
             else:
                 QUICK_ACTIONS_BASE = (
-                    pystray.MenuItem('Play most recent clip', lambda: cutter.open_clip(play=True)),
+                    pystray.MenuItem('Play most recent clip',      lambda: cutter.open_clip(play=True)),
                     pystray.MenuItem('View last clip in explorer', lambda: cutter.open_clip(play=False)),
                     pystray.MenuItem('Concatenate two last clips', lambda: cutter.concatenate_last_clips()),
-                    pystray.MenuItem('Delete most recent clip', lambda: cutter.delete_clip()),
-                    pystray.MenuItem('Undo most recent action', cutter.undo)
+                    pystray.MenuItem('Delete most recent clip',    lambda: cutter.delete_clip()),
+                    pystray.MenuItem('Undo most recent action',    cutter.undo)
                 )
 
             # set up final quick-action and recent-clip menus + setting their location/organization within the full menu
