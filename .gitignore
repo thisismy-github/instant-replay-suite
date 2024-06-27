@@ -138,5 +138,6 @@ resources/*.ico
 version_info*.txt
 update*.txt
 history*.txt
+count*.txt
 undo*.txt
 *.ini

@@ -315,35 +315,57 @@ def auto_rename_clip(path: str) -> tuple[str, str]:
         parts = basename(path).split()
         parts[-1] = '.'.join(parts[-1].split('.')[:-3])
 
+        # do date first since that's the most likely thing to fail
         date_string = ' '.join(parts[-3:])
         date = datetime.strptime(date_string, '%Y.%m.%d - %H.%M.%S')
         game = ' '.join(parts[:-3])
         if game.lower() in GAME_ALIASES:
             game = GAME_ALIASES[game.lower()]
 
-        renamed_base_no_ext = RENAME_FORMAT.replace('?game', game).replace('?date', date.strftime(RENAME_DATE_FORMAT))
-        renamed_path_no_ext = pjoin(dirname(path), renamed_base_no_ext)
-        renamed_path = renamed_path_no_ext + '.mp4'
+        folder = dirname(path)
+        template_base = RENAME_FORMAT.replace('?game', game).replace('?date', date.strftime(RENAME_DATE_FORMAT))
+        template_path = pjoin(folder, template_base) + '.mp4'
+        renamed_path = template_path
 
-        count_detected = '?count' in renamed_path_no_ext
+        count_detected = '?count' in template_path
         protected_paths = cutter.protected_paths    # this is exactly what i want to avoid but i'm leaving it for now
         if count_detected or exists(renamed_path) or renamed_path in protected_paths:
-            count = RENAME_COUNT_START_NUMBER
             if not count_detected:                  # if forced to add number, use windows-style count: start from (2)
                 count = 2
-                renamed_path_no_ext += ' (?count)'
+                template_path += ' (?count)'
+            else:
+                count = RENAME_COUNT_START_NUMBER
+
+            # users manually deleting/renaming clips results in disjointed clip numbering. to...
+            # ...fix this for any `RENAME_FORMAT`, we now track the latest count for the specific...
+            # ...template we're using (e.g. "l4d2 ?count 5.10.19.mp4")
+            count = TEMPLATE_COUNTS.setdefault(template_path, count)
+
             while True:
                 count_string = str(count).zfill(RENAME_COUNT_PADDED_ZEROS + (1 if count >= 0 else 2))
-                renamed_path = renamed_path_no_ext.replace("?count", count_string) + '.mp4'
+                renamed_path = template_path.replace('?count', count_string)
                 if not exists(renamed_path) and renamed_path not in protected_paths:
                     break
                 count += 1
 
+            # update the count for this specific template
+            # NOTE: DON'T add 1 here -> if we delete the latest clip or concat the latest two clips together, this...
+            # ...replicates the old behavior of "reusing" the same count for the next clip for those specific scenarios
+            TEMPLATE_COUNTS[template_path] = count
+
+            # check if we previously had a different template from this folder and remove it accordingly -> this way...
+            # ...we can keep `TEMPLATE_COUNTS` small even if `RENAME_FORMAT` is very specific (like down to the second)
+            if folder in TEMPLATE_FOLDERS:
+                old_template_path = TEMPLATE_FOLDERS[folder]
+                if old_template_path != template_path:
+                    del TEMPLATE_COUNTS[old_template_path]
+                    TEMPLATE_FOLDERS[folder] = template_path
+
         renamed_base = basename(renamed_path)
         logging.info(f'Renaming video to: {renamed_base}')
         rename(path, renamed_path)                  # super-rename not needed
-        logging.info('Rename successful.')
-        return abspath(renamed_path), renamed_base  # use abspath to ensure consistent path formatting later on
+        logging.info('Rename successful.')          # use abspath to ensure consistent path formatting later on
+        return abspath(renamed_path), renamed_base
 
     except Exception as error:
         logging.warning(f'(!) Clip at {path} could not be renamed (maybe it was already renamed?): "{error}"')
@@ -784,6 +806,7 @@ def restore_menu_file():
 //                                - Use "?latest" to represent the path to the latest clip.
 //                                - Quotes and backslashes must be escaped:
 //                                    ("cmd:echo ?latest > \".\\test.txt\")
+//
 // Submenu example:
 //    {
 //        "Quick actions": {
@@ -944,6 +967,7 @@ ICON_PATH =       cfg.load('CUSTOM_ICON', '' if IS_COMPILED else 'executable\\ic
 BACKUP_FOLDER =   cfg.load('BACKUP_FOLDER', 'Backups', remove='"')
 HISTORY_PATH =    cfg.load('HISTORY', 'history.txt', remove='"')
 UNDO_LIST_PATH =  cfg.load('UNDO_LIST', 'undo.txt', remove='"')
+OLD_COUNTS_PATH = cfg.load('COUNT_PATH', 'count.txt', remove='"')
 
 cfg.setSection(' --- Special Folders --- ')
 cfg.comment('''These only apply if the associated path
@@ -1132,10 +1156,13 @@ if splitdrive(HISTORY_PATH)[0]: HISTORY_PATH = abspath(HISTORY_PATH)
 else: HISTORY_PATH = pjoin(APPDATA_FOLDER if SAVE_HISTORY_TO_APPDATA_FOLDER else CWD, HISTORY_PATH)
 if splitdrive(UNDO_LIST_PATH)[0]: UNDO_LIST_PATH = abspath(UNDO_LIST_PATH)
 else: UNDO_LIST_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, UNDO_LIST_PATH)
+if splitdrive(OLD_COUNTS_PATH)[0]: OLD_COUNTS_PATH = abspath(OLD_COUNTS_PATH)
+else: OLD_COUNTS_PATH = pjoin(APPDATA_FOLDER if SAVE_UNDO_LIST_TO_APPDATA_FOLDER else CWD, OLD_COUNTS_PATH)
 
 # ensuring above paths are valid
-if not exists(dirname(HISTORY_PATH)):   makedirs(dirname(HISTORY_PATH))
-if not exists(dirname(UNDO_LIST_PATH)): makedirs(dirname(UNDO_LIST_PATH))
+if not exists(dirname(HISTORY_PATH)):    makedirs(dirname(HISTORY_PATH))
+if not exists(dirname(UNDO_LIST_PATH)):  makedirs(dirname(UNDO_LIST_PATH))
+if not exists(dirname(OLD_COUNTS_PATH)): makedirs(dirname(OLD_COUNTS_PATH))
 
 # constructing icon path -> first try resource folder, then CWD
 # NOTE: pystray won't use our .exe icon if `ICON_PATH` is empty/None
@@ -1546,6 +1573,28 @@ class AutoCutter:
             elif response == 6:     # Yes
                 logging.info('"Yes" selected on welcome dialog, looking for pre-existing clips...')
                 self.check_for_clips(manual_update=True, from_time=0)
+
+        # if a counts file exists and is based on the same `RENAME_FORMAT`, import counts for...
+        # ...different template paths so the user can restart IRS without losing their positions
+        try:
+            if exists(OLD_COUNTS_PATH):
+                with open(OLD_COUNTS_PATH, 'r', encoding='utf-16-le') as counts:
+                    for line_number, line in enumerate(counts):
+                        line = line.strip()
+                        if line_number == 0:
+                            if line != RENAME_FORMAT:
+                                logging.info('`RENAME_FORMAT` has changed, ignoring previous counts.')
+                                break
+                        template, count = line.split(': ')
+                        TEMPLATE_COUNTS[template] = int(count)
+                        TEMPLATE_FOLDERS[dirname(template)] = template
+                    else:           # nobreak -> we did not break the for-loop (`RENAME_FORMAT` was the same)
+                        logging.info(f'Counts for {len(TEMPLATE_COUNTS)} existing templates imported.')
+            else:
+                starting_count = RENAME_COUNT_START_NUMBER if '?count' in RENAME_FORMAT else 2
+                logging.info(f'No counts file detected, starting all counts from {starting_count}.')
+        except:
+            logging.error(f'(!) Error while reading previous counts from {OLD_COUNTS_PATH}: {format_exc()}')
 
     # --- hotkeys ---
         # define instant replay hotkey BEFORE we do the dumb garbage below it
@@ -2159,6 +2208,8 @@ if __name__ == '__main__':
 
         logging.info(f'Memory usage before initializing AutoCutter class: {get_memory():.2f}mb')
         cutter = AutoCutter()
+        TEMPLATE_COUNTS: dict[str, int] = {}
+        TEMPLATE_FOLDERS: dict[str, str] = {}
         logging.info(f'Memory usage after initializing AutoCutter class: {get_memory():.2f}mb')
 
         if SEND_DELETED_FILES_TO_RECYCLE_BIN:
@@ -2186,6 +2237,16 @@ if __name__ == '__main__':
                             history.write(f'{(c.path if isinstance(c, Clip) else c)}\n'.encode("utf-16"))
                         except:
                             logging.info('(?) Error while saving history: ' + format_exc())
+
+                # save template path counts
+                logging.info(f'Counts: {TEMPLATE_COUNTS}')
+                with open(OLD_COUNTS_PATH, 'wb') as counts:
+                    counts.write(RENAME_FORMAT + '\n')
+                    for template, count in TEMPLATE_COUNTS.items():
+                        try:
+                            counts.write(f'{template}: {count}\n')
+                        except:
+                            logging.info('(?) Error while saving counts: ' + format_exc())
 
                 # unregister cfg.write if config has been externally modified
                 with open(CONFIG_PATH, 'rb') as file:
