@@ -8,6 +8,6 @@ trimming files (<number of seconds>.wav -> 15.wav, 30.wav, etc.)
 
 ---
 
-The default files are sourced from https://ttsmp3.com/
-with the "US English/Joanna" voice and converted to .WAV
-using https://cloudconvert.com/mp3-to-wav.
+The default files are sourced from https://ttsmp3.com/ with
+the "US English/Joanna" voice and converted to .WAV using
+PyPlayer (alternatively: https://cloudconvert.com/mp3-to-wav).

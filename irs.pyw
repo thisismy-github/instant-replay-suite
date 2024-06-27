@@ -2102,9 +2102,11 @@ class AutoCutter:
         ''' Trims `clip` down to the last `length` seconds. Clip is edited
             in-place, and the original is moved to `BACKUP_FOLDER`. '''
         clip_length = clip.length
-        if clip_length <= length:
+        if clip_length <= length + 0.01:
+            play_alert(sound='clip is too short')
             return logging.info(f'(?) Video is only {clip_length:.2f} seconds long and cannot be trimmed to {length} seconds.')
         if length <= 0:
+            play_alert(sound='trim cancelled')
             return logging.info('(?) Trim length must be greater than 0 seconds.')
         logging.info(f'Trimming clip {clip.name} from {clip_length:.2f} to {length} seconds...')
 
