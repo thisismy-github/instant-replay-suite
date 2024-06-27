@@ -749,6 +749,9 @@ def restore_menu_file():
 //    "open_video_folder":    Opens the currently defined "Videos" folder.
 //    "open_install_folder":  Opens this program's root folder.
 //    "open_backup_folder":   Opens the currently defined backup folder.
+//    "open_settings":        Opens "config.settings.ini".
+//    "open_menu_layout":     Opens "config.menu.ini".
+//    "open_backup_folder":   Opens the currently defined backup folder.
 //    "play_most_recent":     Plays your most recent clip.
 //    "explore_most_recent":  Opens your most recent clip in Explorer.
 //    "delete_most_recent":   Deletes your most recent clip.
@@ -776,14 +779,19 @@ def restore_menu_file():
 //                                - Not naming this item will default to "Memory usage: ?memorymb":
 //                                    ("memory") OR ("": "memory")
 //                                - This item will be greyed out and is informational only.
-//
+//    "cmd:":                 Adds a custom command to the menu.
+//                                - Any command may be specified after the colon.
+//                                - Use "?latest" to represent the path to the latest clip.
+//                                - Quotes and backslashes must be escaped:
+//                                    ("cmd:echo ?latest > \".\\test.txt\")
 // Submenu example:
 //    {
 //        "Quick actions": {
 //            "Play most recent clip": "play_most_recent",
 //            "View last clip in explorer": "explore_most_recent",
 //            "Concatenate last two clips": "concatenate_last_two",
-//            "Delete most recent clip": "delete_most_recent"
+//            "Delete most recent clip": "delete_most_recent",
+//            "Open Notepad": "cmd:notepad.exe"
 //        },
 //    }
 // ---------------------------------------------------------------------------
@@ -793,6 +801,8 @@ def restore_menu_file():
 \t\t"Open root": "open_install_folder",
 \t\t"Open videos": "open_video_folder",
 \t\t"Open backups": "open_backup_folder",
+\t\t"Open settings": "open_settings",
+\t\t"Customize menu": "open_menu_layout",
 \t\t"separator",
 \t\t"Update check": "check_for_updates",
 \t\t"About...": "about",
@@ -971,6 +981,8 @@ cfg.comment('''Valid left-click and middle-click actions:
     'open_video_folder':    Opens the currently defined "Videos" folder.
     'open_install_folder':  Opens this program's root folder.
     'open_backup_folder':   Opens the currently defined backup folder.
+    'open_settings':        Opens the settings file ("config.settings.ini").
+    'open_menu_layout':     Opens the menu layout file ("config.menu.ini").
     'play_most_recent':     Plays your most recent clip.
     'explore_most_recent':  Opens your most recent clip in Explorer.
     'delete_most_recent':   Deletes your most recent clip.
@@ -2303,6 +2315,8 @@ if __name__ == '__main__':
             'open_video_folder':    lambda: os.startfile(VIDEO_FOLDER),
             'open_install_folder':  lambda: os.startfile(CWD),
             'open_backup_folder':   lambda: os.startfile(BACKUP_FOLDER),
+            'open_settings':        lambda: os.startfile(CONFIG_PATH),
+            'open_menu_layout':     lambda: os.startfile(CUSTOM_MENU_PATH),
             'play_most_recent':     lambda: cutter.open_clip(play=True),
             'explore_most_recent':  lambda: cutter.open_clip(play=False),
             'delete_most_recent':   lambda: cutter.delete_clip(),               # small RAM drop by making these not lambdas
@@ -2330,7 +2344,8 @@ if __name__ == '__main__':
             def evaluate_menu(item_pairs: list[tuple(str, str)], menu: list[pystray.MenuItem]):
                 ''' Recursively solves menus/submenus using a list of
                     name/action `item_pairs` and exports them to `menu`. '''
-                global exit_item_exists
+                global exit_item_exists             # ↓ workaround for python bug/oddity involving creating lambdas in iterables
+                get_cmd_action = lambda cmd: lambda _: subprocess.Popen(cmd.replace('?latest', cutter.last_clips[-1].path), shell=True)
                 for name, action in item_pairs:
                     try:
                         action = action.strip().lower()
@@ -2349,6 +2364,9 @@ if __name__ == '__main__':
                                 menu.append(pystray.MenuItem(get_mem_title(name), None, enabled=False))
                             else:
                                 menu.append(pystray.MenuItem(lambda _: f'Memory usage: {get_memory():.2f}mb', None, enabled=False))
+                            continue
+                        elif action[:4] == 'cmd:':  # NOTE: supports a "?latest" variable to get latest clip's path
+                            menu.append(pystray.MenuItem(name, get_cmd_action(action[4:])))
                             continue
                         elif action == 'quit':      # add action normally, but confirm that an exit item is in the menu
                             exit_item_exists = True
